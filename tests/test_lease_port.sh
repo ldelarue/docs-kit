@@ -50,7 +50,7 @@ in_range() {
 }
 
 command -v shellcheck >/dev/null 2>&1 || fail "shellcheck missing (run: mise install)"
-shellcheck shared/scripts/lease-port tests/test_lease_port.sh || fail "shellcheck findings"
+shellcheck shared/scripts/lease-port shared/scripts/kit-sync tests/test_lease_port.sh || fail "shellcheck findings"
 
 printf '1) scan returns a free port in range\n'
 base=$(sh "$SCRIPT")

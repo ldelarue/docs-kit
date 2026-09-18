@@ -132,7 +132,14 @@ DOCS_SNIPPET = "{{ vars.docs_kit }}/shared/mise/docs.toml"
 KIT_SYNC_MARKER = "docs:kit-sync"
 _KIT_SYNC_RUN = r"""
 set -eu
-ver="$({ docs-kit --version 2>/dev/null || uv run --no-dev docs-kit --version; } | awk '{print $2}')"
+if [ -f {shim}/shared/scripts/kit-sync ]; then
+  exec sh {shim}/shared/scripts/kit-sync {shim}
+fi
+ver="$({ docs-kit --version 2>/dev/null || uv run --no-dev docs-kit --version; } 2>/dev/null | awk '{print $2}')"
+if [ -z "$ver" ]; then
+  echo "kit-sync: no docs-kit on PATH or uv project here; install the CLI first (kit README section 1)" >&2
+  exit 1
+fi
 v="v$ver"
 if [ ! -d {shim} ]; then
   git clone -q -c advice.detachedHead=false --depth 1 --branch "$v" \
@@ -143,7 +150,7 @@ if [ "$(git -C {shim} describe --tags --exact-match 2>/dev/null || true)" != "$v
   git -C {shim} fetch -q --depth 1 origin "+refs/tags/$v:refs/tags/$v"
   git -C {shim} -c advice.detachedHead=false checkout -q "$v"
 fi
-echo "docs task layer pinned at $v"
+echo "docs task layer pinned at $v (frozen fallback; kit-sync engine file arrives with a later release)"
 """
 
 

@@ -96,10 +96,17 @@ CLI:
 
 ```toml
 [tasks."docs:kit-sync"]
-description = "Pin the .docs-kit task layer to the installed docs-kit version"
+description = "Pin the .docs-kit docs task layer to the installed docs-kit version"
 run = '''
 set -eu
-ver="$({ docs-kit --version 2>/dev/null || uv run --no-dev docs-kit --version; } | awk '{print $2}')"
+if [ -f .docs-kit/shared/scripts/kit-sync ]; then
+  exec sh .docs-kit/shared/scripts/kit-sync .docs-kit
+fi
+ver="$({ docs-kit --version 2>/dev/null || uv run --no-dev docs-kit --version; } 2>/dev/null | awk '{print $2}')"
+if [ -z "$ver" ]; then
+  echo "kit-sync: no docs-kit on PATH or uv project here; install the CLI first (kit README section 1)" >&2
+  exit 1
+fi
 v="v$ver"
 if [ ! -d .docs-kit ]; then
   git clone -q -c advice.detachedHead=false --depth 1 --branch "$v" \
@@ -110,9 +117,18 @@ if [ "$(git -C .docs-kit describe --tags --exact-match 2>/dev/null || true)" != 
   git -C .docs-kit fetch -q --depth 1 origin "+refs/tags/$v:refs/tags/$v"
   git -C .docs-kit -c advice.detachedHead=false checkout -q "$v"
 fi
-echo "docs task layer pinned at $v"
+echo "docs task layer pinned at $v (frozen fallback; kit-sync engine file arrives with a later release)"
 '''
 ```
+
+Task definition and logic are separated deliberately: the canonical sync
+engine lives **in the kit** (`shared/scripts/kit-sync`) and is therefore
+maintained in one place, updated together with every pinned layer; the
+snippet above (consumer config, unavoidable for bootstrap since it must run
+before the layer exists) delegates to that engine as soon as it is present.
+The remaining inline body is a frozen fallback for layers published before
+the engine existed (v0.2.1 and older) and disappears from behaviour—not from
+the file—once the pin moves to a newer release.
 
 The task reads the version of the installed CLI and checks `.docs-kit` out
 at exactly that tag (`latest` or a pinned `@vX.Y.Z` — either way `$ver` is a

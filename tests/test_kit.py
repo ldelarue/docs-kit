@@ -113,7 +113,9 @@ def test_init_shim_mode_ships_kit_sync_task(tmp_path):
     mise = tomllib.loads(mise_path.read_text())  # valid TOML
     assert mise["vars"]["docs_kit"] == ".docs-kit"
     sync = mise["tasks"]["docs:kit-sync"]
-    assert 'git+ssh' not in sync["run"] and "docs-kit --version" in sync["run"]
+    assert sync["run"].lstrip().startswith("set -eu")
+    assert "exec sh .docs-kit/shared/scripts/kit-sync" in sync["run"]  # engine fast-path
+    assert "docs-kit --version" in sync["run"]  # inline fallback for old layers
     assert ".docs-kit/" in (repo / ".gitignore").read_text()
     assert mise_path.read_text().count("docs:kit-sync") == 1  # single table
     before = mise_path.read_bytes()

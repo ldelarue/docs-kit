@@ -19,7 +19,7 @@ jobs:
       # protection requires the CI check on release PRs, create a PAT with
       # contents+pull-requests write, store it as RELEASE_PLEASE_TOKEN, and
       # pass it via with.token below.
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         with:
           config-file: .release-please-config.json
           manifest-file: .release-please-manifest.json

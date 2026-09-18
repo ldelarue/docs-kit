@@ -14,23 +14,27 @@ jobs:
   # CI has no personal clone: the [vars].docs_kit path in .mise.toml does not
   # exist on runners, so the [task_config].includes line is silently skipped
   # and every docs:* task VANISHES (mise reports "no task docs:check found" -
-  # not "missing path"). Fix = check out the private kit repo and override the
-  # path via mise.local.toml before mise-action runs. Create a fine-grained
-  # DOCS_KIT_PAT (contents: read on ldelarue/docs-kit) secret, then add to
-  # BOTH jobs (before mise-action):
-  #   - uses: actions/checkout@v7
-  #     with:
-  #       repository: ldelarue/docs-kit
-  #       path: .docs-kit
-  #       token: ${{ secrets.DOCS_KIT_PAT }}
-  #       # ref: v0.1.3     # optional: freeze the kit version in CI
-  #   - run: printf '[vars]\ndocs_kit = "%s/.docs-kit"\n' "$GITHUB_WORKSPACE" > mise.local.toml
-  # Details: docs-kit ROADMAP.md, Phase 2 step 4.
+  # not "missing path"). Fix = check out docs-kit PINNED TO A TAG and override
+  # the path via mise.local.toml before mise-action runs.
+  # One-time setup: create a fine-grained DOCS_KIT_PAT (contents: read on
+  # ldelarue/docs-kit) as a secret of THIS repo.
+  # After each docs-kit release: bump kit-ref BELOW in BOTH jobs (known tags:
+  # git ls-remote --tags https://github.com/ldelarue/docs-kit.git).
   check:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+
+      # --- docs-kit, tag-pinned (keep in sync with the deploy job) ---
+      - uses: actions/checkout@v7
+        with:
+          repository: ldelarue/docs-kit
+          path: .docs-kit
+          token: ${{ secrets.DOCS_KIT_PAT }}
+          ref: v0.2.1
+      - run: printf '[vars]\ndocs_kit = "%s/.docs-kit"\n' "$GITHUB_WORKSPACE" > mise.local.toml
+
       - uses: jdx/mise-action@v3
       - uses: actions/cache@v4
         with:
@@ -52,6 +56,16 @@ jobs:
     steps:
       - uses: actions/configure-pages@v6
       - uses: actions/checkout@v7
+
+      # --- docs-kit, tag-pinned (keep in sync with the check job) ---
+      - uses: actions/checkout@v7
+        with:
+          repository: ldelarue/docs-kit
+          path: .docs-kit
+          token: ${{ secrets.DOCS_KIT_PAT }}
+          ref: v0.2.1
+      - run: printf '[vars]\ndocs_kit = "%s/.docs-kit"\n' "$GITHUB_WORKSPACE" > mise.local.toml
+
       - uses: jdx/mise-action@v3
       - uses: actions/cache@v4
         with:

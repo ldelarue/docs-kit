@@ -31,3 +31,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+
+      - name: Move the latest ref to this release
+        # Branch (not tag!): uv treats tags as immutable, so a movable
+        # `@latest` dep pin only re-resolves if it points at a branch.
+        run: git push -f origin "HEAD:refs/heads/latest"

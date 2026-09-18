@@ -157,7 +157,7 @@ def _integrate_mise(root: Path, kit_home: str, spec_name: str) -> None:
 # ($DOCS_KIT may use ~/ but NOT for init defaults, which are written absolute.)
 
 [tasks."docs:init"]
-description = "Re-scaffold the docs site (refuses existing files without --force)"
+description = "Install/repair docs integration (writes missing, skips identical; --force overwrites hand-edited files)"
 run = 'DOCS_KIT="${{DOCS_KIT/#\\~/$HOME}}"; if command -v docs-kit >/dev/null 2>&1; then docs-kit init; else uv run --no-dev --project "$DOCS_KIT" docs-kit init; fi'
 
 [tasks."docs:refresh"]
@@ -210,15 +210,46 @@ def _integrate_gitignore(root: Path) -> None:
 
 
 def cmd_init(root: Path, spec_name: str, force: bool, kit_home: str) -> int:
-    scaffold = _scaffold_files(root, spec_name) + _generated_outputs(root, spec_name)
-    if not force:
-        existing = [str(p.relative_to(root)) for p, _ in scaffold if p.exists()]
-        if existing or (root / ".mise.toml").exists() and "docs:refresh" in (root / ".mise.toml").read_text(encoding="utf-8"):
-            msg = "ERROR: already initialized (existing: " + ", ".join(existing) + "). Use --force to overwrite."
-            sys.exit(msg)
-    for path, content in scaffold:
+    """Install or repair the docs integration (idempotent).
+
+    - missing files            -> written
+    - byte-identical files     -> skipped
+    - existing files that differ (hand edits) -> only overwritten with --force
+    - missing mise/gitignore parts -> re-added (repairs a deleted block)
+    """
+    scaffold = [(p, c, "scaffold") for p, c in _scaffold_files(root, spec_name)]
+    generated = [(p, c, "generated") for p, c in _generated_outputs(root, spec_name)]
+    plan: list[tuple[Path, str]] = []
+    conflicts: list[str] = []
+    gen_conflicts: list[str] = []
+    unchanged: list[str] = []
+    for path, content, kind in scaffold + generated:
+        if not path.exists():
+            plan.append((path, content))
+            continue
+        if path.read_text(encoding="utf-8") == content:
+            unchanged.append(str(path.relative_to(root)))
+        elif force:
+            plan.append((path, content))
+        elif kind == "generated":
+            gen_conflicts.append(str(path.relative_to(root)))
+        else:
+            conflicts.append(str(path.relative_to(root)))
+    if conflicts or gen_conflicts:
+        parts = ["ERROR: existing files differ from what docs-kit would generate (not touched):"]
+        for rel in gen_conflicts:
+            parts.append(f"  generated: {rel}   -> fix with `mise run docs:refresh` instead")
+        for rel in conflicts:
+            parts.append(f"  hand-written: {rel}")
+        parts.append("Review them, or re-run with --force to overwrite.")
+        sys.exit("\n".join(parts))
+    for path, content in plan:
         _write(path, content)
         print(f"  wrote {path.relative_to(root)}")
+    for rel in unchanged:
+        print(f"  unchanged {rel}")
+    if not plan:
+        print("  scaffold already complete (nothing to write)")
     _integrate_gitignore(root)
     _integrate_mise(root, kit_home, spec_name)
     print("done. Next: `mise run docs:refresh` to verify, then commit.")

@@ -72,7 +72,7 @@ def test_check_drifts_when_spec_changes(tmp_path):
     assert cli.cmd_check(repo, SPEC) == 1
 
 
-def test_init_scaffolds_then_refuses(tmp_path):
+def test_init_scaffolds_then_is_idempotent(tmp_path):
     repo = make_repo(tmp_path, "repo", "golang.openapi.json")
     assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
     for rel in (
@@ -96,9 +96,42 @@ def test_init_scaffolds_then_refuses(tmp_path):
     assert 'DOCS_KIT = "/tmp/kit-home"' in mise
     assert "docs:build" in mise and "docs:check" in mise
     assert 'uv = "latest"' in mise
+    before = (repo / ".mise.toml").read_bytes()
+    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0  # repair no-op
+    assert (repo / ".mise.toml").read_bytes() == before
+    assert cli.cmd_init(repo, SPEC, True, "/tmp/kit-home") == 0
+    assert (repo / ".mise.toml").read_bytes() == before
+
+
+def test_init_repairs_deleted_tasks_block(tmp_path):
+    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
+    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
+    mise_path = repo / ".mise.toml"
+    mise_path.write_text(
+        mise_path.read_text().split("### docs")[0].rstrip() + "\n"
+    )  # user deleted the docs block on purpose
+    assert "docs:refresh" not in mise_path.read_text()
+    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
+    mise = mise_path.read_text()
+    assert "docs:refresh" in mise and 'DOCS_KIT = "/tmp/kit-home"' in mise
+    assert cli.cmd_check(repo, SPEC) == 0
+
+
+def test_init_refuses_hand_edits(tmp_path):
+    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
+    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
+    (repo / "zensical.toml").write_text("[project]\nsite_name = 'mine'\n")
     with pytest.raises(SystemExit):
         cli.cmd_init(repo, SPEC, False, "/tmp/kit-home")
+    assert (repo / "zensical.toml").read_text().startswith("[project]")  # untouched
     assert cli.cmd_init(repo, SPEC, True, "/tmp/kit-home") == 0
+    assert "golang-api-playground" in (repo / "zensical.toml").read_text()
+    drifted = repo / cli.ENDPOINTS_PAGE
+    drifted.write_text(drifted.read_text() + "\ndrift\n")
+    with pytest.raises(SystemExit):
+        cli.cmd_init(repo, SPEC, False, "/tmp/kit-home")
+    assert cli.cmd_refresh(repo, SPEC) == 0  # generated files are refresh's job
+    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
 
 
 def test_init_merges_existing_mise_tables(tmp_path):

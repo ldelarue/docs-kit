@@ -24,7 +24,7 @@ design).
 
 | command | effect |
 | --- | --- |
-| `docs-kit init [--force] [--docs-kit PATH]` | one-time scaffold: `docs/` skeleton, `zensical.toml`, `.github/workflows/docs.yml`, `.gitignore` entries, generated pages, and the `mise` integration block in `.mise.toml` |
+| `docs-kit init [--force] [--docs-kit PATH]` | install **or repair** the docs integration: writes missing files, skips byte-identical ones, (re-)adds the `.mise.toml` block and `.gitignore` entries if they were deleted; refuses only if existing files differ from generated content — `--force` overwrites those |
 | `docs-kit refresh [--spec openapi.json]` | re-export step is done by the repo (`mise run openapi`), then the kit copies + renders the four generated files |
 | `docs-kit check` | renders in memory and byte-compares against the repo; exits non-zero on missing/stale files |
 

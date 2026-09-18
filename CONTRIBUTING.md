@@ -34,7 +34,7 @@ The repository is private (`github.com/ldelarue/docs-kit`); every install
 method needs SSH (or HTTPS after `gh auth setup-git`). There is no PyPI
 publication - **git refs are the pinning mechanism**. A `latest` branch is
 force-moved onto each new release tag by Release's `move-latest` job, inside
-the dispatch that cut the tag - not from a release-event workflow, because the
+the run that cut the tag - not from a `release`-event workflow, because the
 tag and the `release.created` event that release-please creates with
 `GITHUB_TOKEN` start no workflow run at all. Commits on `main` that are not
 part of a release are never exposed through `latest`. The wheel on the GitHub
@@ -156,12 +156,17 @@ runner never depends on what is installed on a machine.
 **This repository**: `ci.yml` first runs `hk check --all` (the same steps as
 the pre-commit hook - see Development), then pytest plus the
 lease-port/shellcheck suite on PRs and main, and uploads the `docs-kit-dist`
-wheel artifact. `release.yml` is the manual dispatch: release-please, then
-`move-latest`, which force-moves `latest` to the sha it just tagged - in the
-same run, because a job waiting on that tag or `release.created` would never
-be woken. `publish.yml` attaches the wheels to the GitHub Release and therefore
-needs `release.created` to fire: until the `RELEASE_PLEASE_TOKEN` noted in
-`release.yml` exists, it stays silent and assets are attached by hand.
+wheel artifact. `release.yml` runs on every push to main: release-please
+keeps one release PR open (opening or updating it as conventional commits
+accumulate), and on the run whose push merges that PR it tags `vX.Y.Z`,
+creates the GitHub Release from the CHANGELOG, runs `move-latest` to
+force-move `latest` to the tagged sha, and ends by calling `publish.yml`
+(`workflow_call`) to attach the wheels. A `concurrency` group keeps two runs
+from cutting the same release. Publishing is invoked in-workflow rather than
+on `release.created` because events generated with `GITHUB_TOKEN` (the tag
+push, the release) never fire other workflows - a called workflow sees the
+release regardless of token, so no PAT is required. The merge run is the real
+gate: nothing reaches a tag until a human merges the release PR.
 
 ## Development
 
@@ -202,25 +207,27 @@ and the git plumbing itself is covered against a local `file://` mirror via
    A hand-edited main leaves that PR with nothing to bump, and puts a version
    string on refs no tag ever marked (the `0.2.1` that `latest` briefly carried
    existed only in a file).
-2. GitHub Actions → Release → **Run workflow** (nothing is automatic): opens
-   or updates a release PR bumping `pyproject.toml`, `__version__`, and the
-   release-please manifest together. This needs the repository setting
-   Settings → Actions → General → **Allow GitHub Actions to create and approve
-   pull requests** - the PR is created by `GITHUB_TOKEN` and fails with
-   "GitHub Actions is not permitted to create or approve pull requests"
-   otherwise (`gh api repos/ldelarue/docs-kit/actions/permissions/workflow`
-   reports the flag). Consequence of that same token: the release PR shows no
-   CI checks, and `release.created` fires nothing, which is why `latest` moves
-   inside the Release run and step 4 exists.
-3. Merge → re-run Release once (it is `workflow_dispatch`-only, so nothing
-   tags the merge by itself) → tag `vX.Y.Z` + GitHub Release, and the same run
-   force-moves the `latest` branch onto that tag. Consumers on `@latest`
-   refresh via `uv tool upgrade` / `uv lock --upgrade-package docs-kit` and
-   `mise run docs:pull-tasks`; pinned consumers re-pin ref+`ref:`.
-4. Wheel assets: `publish.yml` does it only if release-please ran with
-   `RELEASE_PLEASE_TOKEN` (a token of its own is what makes `release.created`
-   fire). Without it, `mise run build` and
-   `gh release upload vX.Y.Z dist/* --clobber`.
+ 2. Pushing conventional commits to `main` fires `release.yml`: release-please
+    opens (or updates) a release PR bumping `pyproject.toml`,
+    `__version__`, and the release-please manifest together. This needs the
+    repository setting
+    Settings → Actions → General → **Allow GitHub Actions to create and approve
+    pull requests** - the PR is created by `GITHUB_TOKEN` and fails with
+    "GitHub Actions is not permitted to create or approve pull requests"
+    otherwise (`gh api repos/ldelarue/docs-kit/actions/permissions/workflow`
+    reports the flag). Consequence of that same token: the release PR shows no
+    CI checks, and `release.created` fires nothing, which is why `latest` moves
+    and the wheels attach inside the Release run itself.
+ 3. Merge the release PR - the only manual step. The push to `main` re-runs
+    release-please, which now cuts the release: tag `vX.Y.Z` on the merge
+    commit + GitHub Release from the CHANGELOG, and the same run force-moves
+    the `latest` branch onto that tag. Consumers on `@latest` refresh via
+    `uv tool upgrade` / `uv lock --upgrade-package docs-kit` and
+    `mise run docs:pull-tasks`; pinned consumers re-pin ref+`ref:`.
+ 4. Wheel assets: the `publish` job then calls `publish.yml` on the same
+    commit and runs `gh release upload vX.Y.Z dist/* --clobber`. Re-run
+    manually (Actions → Publish → Run workflow, pass the tag) to re-attach
+    assets to an existing release.
 
 Dogfood check after release (playground testbed): in `~/Dev/me/golang-api-playground`,
 remove any generated docs-kit block from its `.mise.toml`, re-run

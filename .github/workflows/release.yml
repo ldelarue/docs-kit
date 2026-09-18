@@ -1,7 +1,25 @@
 name: Release
 
+# Standard release-please flow, no manual step:
+#   1. every push to main lets release-please open/update the release PR
+#      (version bumps in pyproject.toml + __version__, CHANGELOG entries);
+#   2. once that PR is merged, the run on the merge commit tags the tag on
+#      that exact commit, and creates the GitHub Release from the CHANGELOG;
+#   3. `latest` moves to the tagged commit, then publish.yml is invoked
+#      in-workflow to attach the wheels.
+# publish is called rather than listening for `on: release`, because events
+# generated with GITHUB_TOKEN (release.created, the tag push) never start
+# workflows; a called workflow always sees the release, no PAT required.
+
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
+
+# Two runs must not cut the same release twice; let the second wait, not race.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -15,19 +33,15 @@ jobs:
       tag_name: ${{ steps.rp.outputs.tag_name }}
       sha: ${{ steps.rp.outputs.sha }}
     steps:
-      # Never runs on its own: trigger manually (Actions -> Release -> Run
-      # workflow). It then opens/updates a release PR bumping
-      # pyproject.toml + __version__ together, and a re-run after that PR merges
-      # tags vX.Y.Z and creates the GitHub Release.
-      # GITHUB_TOKEN also hides everything it creates from Actions: the release
-      # PR gets no CI checks and the tag fires no `release`/`push` event (the
-      # action's own README says `release.created` will not run either), which
-      # is why the `latest` move below lives in this run instead of on an
-      # event. For CI checks on release PRs - and to let publish.yml see the
-      # release at all - create a PAT with contents+pull-requests write, store
-      # it as RELEASE_PLEASE_TOKEN, and pass it via with.token below.
-      # v5 = same inputs/outputs as v4, only the runtime moved to Node 24 (the
-      # v4 line still declares Node 20, which runners now deprecation-warn).
+      # On ordinary pushes: keeps one release PR open, aggregating the
+      # conventional commits since the last release. On the merge commit of
+      # that PR: cuts the release - tags vX.Y.Z and creates the GitHub
+      # Release with the CHANGELOG, right here.
+      # With GITHUB_TOKEN, CI does not run on the release PR itself (its
+      # push never fires ci.yml); the merge-run below is what gates the
+      # release for real. To get checks on the PR too, store a PAT with
+      # contents+pull-requests write as RELEASE_PLEASE_TOKEN and pass it via
+      # with.token below.
       - uses: googleapis/release-please-action@v5
         id: rp
         with:
@@ -36,14 +50,11 @@ jobs:
           # token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
 
   move-latest:
-    # The floating half of the pinning model: `latest` is a branch, not a tag,
-    # because uv re-resolves a branch pin on `uv tool upgrade` - so the
+    # The floating half of the pinning model: `latest` is a branch, not a
+    # tag, because uv re-resolves a branch pin on `uv tool upgrade` - so the
     # README's `@latest` installs only follow a release when this pointer
-    # moves. It moves here, in the run that made the tag, since neither the tag
-    # push nor release.created can wake a workflow (see the note above); on an
-    # event-based trigger the ref would quietly stop following. Pushing the
-    # sha release-please tagged - never main's tip - keeps unreleased commits
-    # invisible through the ref people install from.
+    # moves. Push the sha release-please tagged - never main's tip - so
+    # unreleased commits stay invisible through the ref people install from.
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     runs-on: ubuntu-latest
@@ -64,3 +75,12 @@ jobs:
           echo "latest before: $(git ls-remote origin refs/heads/latest)"
           git push -f origin "${SHA}:refs/heads/latest"
           echo "latest after:  $(git ls-remote origin refs/heads/latest)"
+
+  publish:
+    # Reuses publish.yml on the same commit release-please just tagged (the
+    # caller's checkout sha), so the wheels match the tag exactly.
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    uses: ./.github/workflows/publish.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}

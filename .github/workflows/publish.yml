@@ -1,13 +1,28 @@
 name: Publish
 
-# Attach the built wheels to the GitHub Release created by release-please,
-# so consumers can `gh release download vX.Y.Z -p '*.whl'` or uv-add them.
+# Attach the built wheels to a GitHub Release, so consumers can
+# `gh release download vX.Y.Z -p '*.whl'` or uv-add them.
 # (GitHub has no PyPI/pip index; the release assets + git tag pins are the
 # registry flow here — and publishing to PyPI is a non-goal.)
 
+# Called by release.yml in the run that cut the release: release.created and
+# the tag push are generated with GITHUB_TOKEN and never fire a `release`/
+# `push` trigger, so listening would silently skip. workflow_dispatch stays
+# for re-attaching assets to an existing release.
+
 on:
-  release:
-    types: [created]
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag whose GitHub Release receives the assets
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, git prefix included (e.g. v0.1.0, not 0.1.0)
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -27,11 +42,11 @@ jobs:
       - name: Build wheel + sdist
         run: uv build
 
-      - name: Attach dist/ to the release
+      - name: Attach dist/ to ${{ inputs.tag }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
-        # The `latest` branch is NOT moved here - release-please's GITHUB_TOKEN
-        # never fires this workflow's own trigger (see release.yml), and when a
-        # RELEASE_PLEASE_TOKEN does make it fire, the ref is already correct:
-        # Release moved it in the run that created the tag.
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" dist/* --clobber
+        # release.yml runs this on the commit release-please just tagged, so
+        # the checkout is the tagged tree and the wheels match the tag. The
+        # `latest` branch is release.yml's move-latest job, not this one.

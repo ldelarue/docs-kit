@@ -198,7 +198,14 @@ and the git plumbing itself is covered against a local `file://` mirror via
    `!`/`BREAKING CHANGE` also bump minor; `docs:`/`chore:` release nothing).
 2. GitHub Actions → Release → **Run workflow** (nothing is automatic): opens
    or updates a release PR bumping `pyproject.toml`, `__version__`, and the
-   release-please manifest together.
+   release-please manifest together. This needs the repository setting
+   Settings → Actions → General → **Allow GitHub Actions to create and approve
+   pull requests** - the PR is created by `GITHUB_TOKEN` and fails with
+   "GitHub Actions is not permitted to create or approve pull requests"
+   otherwise (`gh api repos/ldelarue/docs-kit/actions/permissions/workflow`
+   reports the flag). Consequence of that same token: the release PR shows no
+   CI checks, and `release.created` fires nothing, which is why `latest` moves
+   inside the Release run and step 4 exists.
 3. Merge → re-run Release once (it is `workflow_dispatch`-only, so nothing
    tags the merge by itself) → tag `vX.Y.Z` + GitHub Release, and the same run
    force-moves the `latest` branch onto that tag. Consumers on `@latest`

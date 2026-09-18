@@ -26,7 +26,9 @@ jobs:
       # event. For CI checks on release PRs - and to let publish.yml see the
       # release at all - create a PAT with contents+pull-requests write, store
       # it as RELEASE_PLEASE_TOKEN, and pass it via with.token below.
-      - uses: googleapis/release-please-action@v4
+      # v5 = same inputs/outputs as v4, only the runtime moved to Node 24 (the
+      # v4 line still declares Node 20, which runners now deprecation-warn).
+      - uses: googleapis/release-please-action@v5
         id: rp
         with:
           config-file: .release-please-config.json

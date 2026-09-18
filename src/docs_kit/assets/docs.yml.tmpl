@@ -11,18 +11,19 @@ permissions:
   contents: read
 
 jobs:
-  # If .mise.toml installs docs-kit from the private ldelarue/docs-kit repo,
-  # the runner needs read access (docs-kit ROADMAP.md, Phase 2 step 4). Create
-  # a fine-grained `DOCS_KIT_PAT` (contents: read) repo secret and add to both
-  # jobs, before mise-action (the checkout keeps the uv-run fallback usable):
+  # The runner has no personal docs-kit clone: .mise.toml's [env] DOCS_KIT is a
+  # local path that does not exist here. Each job MUST check the kit repo out
+  # and override DOCS_KIT, otherwise the docs tasks fail. Create a
+  # fine-grained DOCS_KIT_PAT (contents: read on ldelarue/docs-kit) secret for
+  # the private kit repo, then add to BOTH jobs (before mise-action):
   #   - uses: actions/checkout@v7
   #     with:
   #       repository: ldelarue/docs-kit
   #       path: .docs-kit
   #       token: ${{ secrets.DOCS_KIT_PAT }}
+  #       # ref: v0.1.1     # optional: freeze CI; default = default branch
   #   plus at job level:  env: { DOCS_KIT: ${{ github.workspace }}/.docs-kit }
-  # A pure-mise CI install instead: configure git with the PAT (insteadOf
-  # rewrite to https), then mise install resolves the git-pinned tools.
+  # Details: docs-kit ROADMAP.md, Phase 2 step 4.
   check:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest

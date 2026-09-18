@@ -35,8 +35,7 @@ site title): run the repo's `mise run openapi` before `docs-kit init`.
 
 After `docs-kit init`, a repo contains only markdown, `zensical.toml`,
 `openapi.json`, the `.mise.toml` block and the CI workflow — no Python project
-lifecycle. The mise tasks (dispatch with a `uvx` fallback while docs-kit has
-no installable source):
+lifecycle at all. The mise tasks:
 
 ```
 mise run docs:refresh   # mise run openapi + docs-kit refresh
@@ -44,54 +43,48 @@ mise run docs:build     # refresh + zensical build --clean  -> site/
 mise run docs:check     # fail if generated docs are stale (CI / git hook)
 ```
 
-## Installation: private Git, pinned by tag (no PyPI)
+Task bodies prefer a `docs-kit` binary found on `PATH`, else they run the one
+from the clone recorded as `$DOCS_KIT` (via `uv run --no-dev --project`), and
+the same pattern builds with `zensical` through `uvx`.
 
-docs-kit is **not** a PyPI package and does not need to be. The supported
-model is: **mise installs docs-kit from its private git repo, pinned to a
-tag** (mise's PyPI backend accepts git sources — see
-[ROADMAP.md](ROADMAP.md), Phase 2). Updates are a manual one-line edit, never
-`pipx upgrade`-style rolling.
+## Installation: clone the repo, point tasks at it, update by hand
 
-For a new user, the full loop (assuming the repo exists at
-`github.com/ldelarue/docs-kit`; run the git auth once with `gh auth setup-git`
-or use the `git@github.com:…` SSH form):
+No PyPI and no version pins — **your local clone is the installed version.**
 
 ```bash
-# 1. declare the tool + scaffold a consumer repo in ONE step
+# 0. once per machine — clone where you like (this checkout is exactly that):
+git clone git@github.com:ldelarue/docs-kit.git ~/Dev/me/docs-kit
+
+# 1. per consumer repo (one command writes everything, incl. $DOCS_KIT):
 cd ~/Dev/my-new-api
-mise use 'pypi:git+https://github.com/ldelarue/docs-kit.git@v0.1.1' \
-         'pypi:zensical@0.0.62'            # mise writes the [tools] keys; keep them
-docs-kit init                              # scaffold docs/ + zensical.toml + tasks
-mise run openapi                           # if openapi.json not produced yet: init once more with --force
-
-# 2. daily usage
+mise run openapi                                   # produce openapi.json first
+uv run --no-dev --project ~/Dev/me/docs-kit docs-kit init
 mise run docs:refresh && mise run docs:build
 
-# 3. upgrade the kit (manual by design): edit the @vX.Y.Z tag in .mise.toml
-mise install && mise run docs:refresh && git diff docs/
+# 2. upgrade the kit manually, whenever you decide — nothing auto-updates:
+cd ~/Dev/me/docs-kit && git pull                   # or: git checkout v0.1.1
+cd ~/Dev/my-new-api && mise run docs:refresh && git diff docs/
 ```
 
-The exact `mise use` key syntax (tag spelling, value shape) should be
-validated once in a scratch directory — paste what mise generates rather
-than hand-writing it (ROADMAP Phase 2). While the repo has **no remote**, a
-local-path bootstrap stands in:
+`docs-kit init` records its own checkout as `[env] DOCS_KIT = <abs path>`
+(override with `--docs-kit`; you may also hand-edit it to a `~/...` path — the
+tasks expand it). Because project installs re-validate Python sources by
+mtime, `git pull` is picked up on the very next `mise run docs:*` — the
+deliberate choice of `uv run --project` over `uvx --from <path>`, which would
+cache wheels and silently serve outdated kit code (~70 ms rebuild observed
+when changed).
 
-```bash
-cd my-api-repo && mise run openapi
-uv run --no-dev --project /Users/ladelaru/Dev/me/docs-kit docs-kit init
-mise run docs:refresh && mise run docs:build
-```
+Optional speed/ergonomics: `uv tool install ~/Dev/me/docs-kit` puts `docs-kit`
+on `PATH`; the tasks' `command -v` branches start using it automatically (run
+`uv tool install` again after each pull, or skip it entirely).
 
-`init` records `[env] DOCS_KIT = <local path>` (overridable: `--docs-kit`) and
-writes task bodies that prefer installed binaries and fall back to
-`uv run --no-dev --project "$DOCS_KIT" docs-kit` /
-`uvx --from "zensical==0.0.62" zensical`. The fallback deliberately uses
-`uv run --project`, not `uvx --from <path>`: uv caches wheels built from local
-paths and silently serves stale kit code after edits, while a project install
-re-validated by source mtime (observed ~70 ms rebuild-when-changed). Local
-paths are not a supported mise source — that is precisely what installing
-from a git tag fixes; see [ROADMAP.md](ROADMAP.md) for the migration and the
-day-to-day update procedure (Phase 3).
+**CI / git hooks:** the scaffolded GitHub workflow gets a commented block to
+check out the docs-kit repo (private-repo PAT) and set `DOCS_KIT` to that
+checkout, reusing the exact same fallback logic. A git hook just calls
+`mise run docs:check`.
+
+The full day-to-day update procedure, CI setup and optional future steps
+(kept as reference): [ROADMAP.md](ROADMAP.md).
 
 ## Development
 

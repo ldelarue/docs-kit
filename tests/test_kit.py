@@ -14,8 +14,9 @@ SPEC = "openapi.json"
 
 def make_repo(base: Path, name: str, fixture: str) -> Path:
     repo = base / name
-    repo.mkdir(parents=True)
+    repo.mkdir(parents=True, exist_ok=True)
     shutil.copy(FIXTURES / fixture, repo / SPEC)
+
     return repo
 
 

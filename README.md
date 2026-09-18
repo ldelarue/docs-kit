@@ -76,7 +76,7 @@ docs-kit --version
 ```bash
 # commit conventional prefixes: feat:=minor  fix:=patch  docs:/chore:=nothing
 # pushing to main opens/updates a release PR; merging that PR is the one manual
-# step: same run cuts the tag + GitHub Release, moves `latest`, attaches wheels
+# step: same run cuts the tag + GitHub Release, attaches wheels, moves `latest`
 ```
 
 Release tags are recreated by the workflow once its release PR is merged (all pre-reset tags were

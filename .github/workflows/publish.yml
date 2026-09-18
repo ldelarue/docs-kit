@@ -1,14 +1,16 @@
 name: Publish
 
-# Attach the built wheels to a GitHub Release, so consumers can
-# `gh release download vX.Y.Z -p '*.whl'` or uv-add them.
+# Publish a release: attach the built wheels to its GitHub Release (so
+# consumers can `gh release download vX.Y.Z -p '*.whl'` or uv-add them), then
+# move the floating `latest` branch onto the tagged commit.
 # (GitHub has no PyPI/pip index; the release assets + git tag pins are the
 # registry flow here — and publishing to PyPI is a non-goal.)
 
-# Called by release.yml in the run that cut the release: release.created and
-# the tag push are generated with GITHUB_TOKEN and never fire a `release`/
-# `push` trigger, so listening would silently skip. workflow_dispatch stays
-# for re-attaching assets to an existing release.
+# Called by bump.yml in the run that cut the release: release.created and the
+# tag push are generated with GITHUB_TOKEN and never fire a `release`/`push`
+# trigger, so listening would silently skip. workflow_dispatch stays for
+# re-attaching assets to an existing release (leave move_latest_to empty then
+# unless you are also re-pointing `latest`).
 
 on:
   workflow_call:
@@ -17,12 +19,22 @@ on:
         description: Release tag whose GitHub Release receives the assets
         required: true
         type: string
+      move_latest_to:
+        description: sha `latest` should be moved to (the tagged commit); empty skips the move
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       tag:
         description: Release tag, git prefix included (e.g. v0.1.0, not 0.1.0)
         required: true
         type: string
+      move_latest_to:
+        description: sha to move `latest` to; empty skips the move
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -32,6 +44,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the tagged commit must be local to be pushed as a ref
 
       - uses: actions/setup-python@v7
         with:
@@ -47,6 +61,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         run: gh release upload "$TAG" dist/* --clobber
-        # release.yml runs this on the commit release-please just tagged, so
-        # the checkout is the tagged tree and the wheels match the tag. The
-        # `latest` branch is release.yml's move-latest job, not this one.
+        # bump.yml runs this on the commit release-please just tagged, so the
+        # checkout is the tagged tree and the wheels match the tag.
+
+      - name: Move latest to ${{ inputs.tag }}
+        if: ${{ inputs.move_latest_to != '' }}
+        env:
+          SHA: ${{ inputs.move_latest_to }}
+        run: |
+          # The floating half of the pinning model: `latest` is a branch, not
+          # a tag, because uv re-resolves a branch pin on `uv tool upgrade` -
+          # so the README's `@latest` installs only follow a release when this
+          # pointer moves. Push the sha release-please tagged - never main's
+          # tip - so unreleased commits stay invisible through the ref people
+          # install from. Runs after the asset upload so `latest` never points
+          # at a release without its wheels.
+          echo "latest before: $(git ls-remote origin refs/heads/latest)"
+          git push -f origin "${SHA}:refs/heads/latest"
+          echo "latest after:  $(git ls-remote origin refs/heads/latest)"

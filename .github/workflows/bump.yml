@@ -1,12 +1,11 @@
-name: Release
+name: Bump
 
-# Standard release-please flow, no manual step:
-#   1. every push to main lets release-please open/update the release PR
-#      (version bumps in pyproject.toml + __version__, CHANGELOG entries);
-#   2. once that PR is merged, the run on the merge commit tags the tag on
-#      that exact commit, and creates the GitHub Release from the CHANGELOG;
-#   3. `latest` moves to the tagged commit, then publish.yml is invoked
-#      in-workflow to attach the wheels.
+# release-please only bumps versions, so this workflow is just the bump:
+# every push to main lets it open/update the release PR (version bumps in
+# pyproject.toml + __version__, CHANGELOG entries); once that PR is merged,
+# the run on the merge commit tags that exact commit and creates the GitHub
+# Release from the CHANGELOG, then hands the tag + sha to publish.yml, which
+# attaches the wheels and moves `latest`.
 # publish is called rather than listening for `on: release`, because events
 # generated with GITHUB_TOKEN (release.created, the tag push) never start
 # workflows; a called workflow always sees the release, no PAT required.
@@ -18,7 +17,7 @@ on:
 
 # Two runs must not cut the same release twice; let the second wait, not race.
 concurrency:
-  group: release
+  group: bump
   cancel-in-progress: false
 
 permissions:
@@ -49,38 +48,14 @@ jobs:
           manifest-file: .release-please-manifest.json
           # token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
 
-  move-latest:
-    # The floating half of the pinning model: `latest` is a branch, not a
-    # tag, because uv re-resolves a branch pin on `uv tool upgrade` - so the
-    # README's `@latest` installs only follow a release when this pointer
-    # moves. Push the sha release-please tagged - never main's tip - so
-    # unreleased commits stay invisible through the ref people install from.
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0 # the tagged commit must be local to be pushed as a ref
-
-      - name: Move latest to ${{ needs.release-please.outputs.tag_name }}
-        env:
-          SHA: ${{ needs.release-please.outputs.sha }}
-        run: |
-          if [ -z "$SHA" ]; then
-            echo "::error::release_created was true but the action reported no sha"
-            exit 1
-          fi
-          git log -1 --format='moving to %H %s' "$SHA"
-          echo "latest before: $(git ls-remote origin refs/heads/latest)"
-          git push -f origin "${SHA}:refs/heads/latest"
-          echo "latest after:  $(git ls-remote origin refs/heads/latest)"
-
   publish:
     # Reuses publish.yml on the same commit release-please just tagged (the
-    # caller's checkout sha), so the wheels match the tag exactly.
+    # caller's checkout sha): wheels are attached, then `latest` moves to the
+    # tagged sha, so the ref people install from never points at a release
+    # without its assets.
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created == 'true' }}
     uses: ./.github/workflows/publish.yml
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}
+      move_latest_to: ${{ needs.release-please.outputs.sha }}

@@ -33,8 +33,9 @@ Everything the [README](README.md) deliberately leaves out: design guarantees, t
 The repository is private (`github.com/ldelarue/docs-kit`); every install
 method needs SSH (or HTTPS after `gh auth setup-git`). There is no PyPI
 publication - **git refs are the pinning mechanism**. A `latest` branch is
-force-moved onto each new release tag by Release's `move-latest` job, inside
-the run that cut the tag - not from a `release`-event workflow, because the
+force-moved onto each new release tag by Publish's Move-latest step, in the
+run that attached the release's assets - not from a `release`-event workflow,
+because the
 tag and the `release.created` event that release-please creates with
 `GITHUB_TOKEN` start no workflow run at all. Commits on `main` that are not
 part of a release are never exposed through `latest`. The wheel on the GitHub
@@ -132,7 +133,7 @@ when even the block is missing) or the tasks stay a version behind.
 > manifest says `0.0.0`, and every pre-reset tag and GitHub Release is deleted,
 > so the next Release dispatch cuts `v0.1.0` - the number the old manifest had
 > already burned on an untagged `0.1.0`. Until that first tag exists, `latest`
-> mirrors `main` by hand (`move-latest` runs only on a real release), and a CLI
+> mirrors `main` by hand (the `latest` move runs only on a real release), and a CLI
 > whose `__version__` matches no tag gets the best-effort shim warning instead
 > of a task layer.
 
@@ -156,12 +157,12 @@ runner never depends on what is installed on a machine.
 **This repository**: `ci.yml` first runs `hk check --all` (the same steps as
 the pre-commit hook - see Development), then pytest plus the
 lease-port/shellcheck suite on PRs and main, and uploads the `docs-kit-dist`
-wheel artifact. `release.yml` runs on every push to main: release-please
+wheel artifact. `bump.yml` runs on every push to main: release-please
 keeps one release PR open (opening or updating it as conventional commits
-accumulate), and on the run whose push merges that PR it tags `vX.Y.Z`,
-creates the GitHub Release from the CHANGELOG, runs `move-latest` to
-force-move `latest` to the tagged sha, and ends by calling `publish.yml`
-(`workflow_call`) to attach the wheels. A `concurrency` group keeps two runs
+accumulate), and on the run whose push merges that PR it tags `vX.Y.Z` and
+creates the GitHub Release from the CHANGELOG, then calls `publish.yml`
+(`workflow_call`) to attach the wheels and finally force-move `latest` to
+the tagged sha. A `concurrency` group keeps two runs
 from cutting the same release. Publishing is invoked in-workflow rather than
 on `release.created` because events generated with `GITHUB_TOKEN` (the tag
 push, the release) never fire other workflows - a called workflow sees the
@@ -207,27 +208,27 @@ and the git plumbing itself is covered against a local `file://` mirror via
    A hand-edited main leaves that PR with nothing to bump, and puts a version
    string on refs no tag ever marked (the `0.2.1` that `latest` briefly carried
    existed only in a file).
- 2. Pushing conventional commits to `main` fires `release.yml`: release-please
-    opens (or updates) a release PR bumping `pyproject.toml`,
-    `__version__`, and the release-please manifest together. This needs the
-    repository setting
-    Settings → Actions → General → **Allow GitHub Actions to create and approve
-    pull requests** - the PR is created by `GITHUB_TOKEN` and fails with
-    "GitHub Actions is not permitted to create or approve pull requests"
-    otherwise (`gh api repos/ldelarue/docs-kit/actions/permissions/workflow`
-    reports the flag). Consequence of that same token: the release PR shows no
-    CI checks, and `release.created` fires nothing, which is why `latest` moves
-    and the wheels attach inside the Release run itself.
- 3. Merge the release PR - the only manual step. The push to `main` re-runs
-    release-please, which now cuts the release: tag `vX.Y.Z` on the merge
-    commit + GitHub Release from the CHANGELOG, and the same run force-moves
-    the `latest` branch onto that tag. Consumers on `@latest` refresh via
-    `uv tool upgrade` / `uv lock --upgrade-package docs-kit` and
-    `mise run docs:pull-tasks`; pinned consumers re-pin ref+`ref:`.
- 4. Wheel assets: the `publish` job then calls `publish.yml` on the same
-    commit and runs `gh release upload vX.Y.Z dist/* --clobber`. Re-run
-    manually (Actions → Publish → Run workflow, pass the tag) to re-attach
-    assets to an existing release.
+2. Pushing conventional commits to `main` fires `bump.yml`: release-please
+   opens (or updates) a release PR bumping `pyproject.toml`,
+   `__version__`, and the release-please manifest together. This needs the
+   repository setting
+   Settings → Actions → General → **Allow GitHub Actions to create and approve
+   pull requests** - the PR is created by `GITHUB_TOKEN` and fails with
+   "GitHub Actions is not permitted to create or approve pull requests"
+   otherwise (`gh api repos/ldelarue/docs-kit/actions/permissions/workflow`
+   reports the flag). Consequence of that same token: the release PR shows no
+   CI checks, and `release.created` fires nothing, which is why the wheels
+   attach and `latest` moves inside the called Publish run.
+3. Merge the release PR - the only manual step. The push to `main` re-runs
+   release-please, which now cuts the release: tag `vX.Y.Z` on the merge
+   commit + GitHub Release from the CHANGELOG. Consumers on `@latest` refresh
+   via `uv tool upgrade` / `uv lock --upgrade-package docs-kit` and
+   `mise run docs:pull-tasks`; pinned consumers re-pin ref+`ref:`.
+4. The `publish` job then calls `publish.yml` on the same commit: build,
+   `gh release upload vX.Y.Z dist/* --clobber`, and finally force-move the
+   `latest` branch onto the tagged sha - so `latest` never points at a
+   release without its assets. Re-run Publish manually (pass the tag, leave
+   `move_latest_to` empty) to re-attach assets to an existing release.
 
 Dogfood check after release (playground testbed): in `~/Dev/me/golang-api-playground`,
 remove any generated docs-kit block from its `.mise.toml`, re-run

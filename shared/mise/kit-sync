@@ -4,14 +4,20 @@
 # with the INSTALLED CLI version, so the tasks in shared/mise/docs.toml can
 # never drift from the CLI build. This file is itself part of the pulled
 # payload, so consumers pick up engine updates by pulling the layer.
+# The target may already exist WITHOUT a checkout (docs-kit init writes
+# .docs-kit/mise.local.toml there before it can pull), so the bootstrap is
+# an in-place `git init` + `remote add` - `git clone` refuses non-empty
+# directories; the stray template is untracked and survives the checkout.
 # Usage: sh kit-sync [SHIM_DIR] [VERSION]   defaults: .docs-kit, auto-detected.
-# Requires: git (SSH access to the kit repo), and either a docs-kit binary on
-# PATH or a uv project for the fallback probe (unless VERSION is given).
+# Requires: git (SSH access to the kit repo, or point DOCS_KIT_REPO elsewhere),
+# and either a docs-kit binary on PATH or a uv project for the fallback probe
+# (unless VERSION is given).
 
 set -eu
 
 SHIM="${1:-.docs-kit}"
-REPO="git@github.com:ldelarue/docs-kit.git"
+REPO="${DOCS_KIT_REPO:-git@github.com:ldelarue/docs-kit.git}"
+export GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o BatchMode=yes}"
 
 if [ "$#" -ge 2 ]; then
 	ver="$2"
@@ -24,17 +30,28 @@ else
 fi
 v="v$ver"
 
-if [ ! -d "$SHIM" ]; then
-	git clone -q -c advice.detachedHead=false --depth 1 --branch "$v" \
-		--filter=blob:none --sparse "$REPO" "$SHIM"
-	git -C "$SHIM" -c advice.detachedHead=false sparse-checkout set --no-cone '/shared/mise/'
+boot=0
+if [ ! -d "$SHIM/.git" ]; then
+	mkdir -p "$SHIM"
+	git init -q "$SHIM"
+	git -C "$SHIM" remote add origin "$REPO"
+	boot=1
+elif [ "$(git -C "$SHIM" describe --tags --exact-match 2>/dev/null || true)" = "$v" ]; then
+	git -C "$SHIM" -c advice.detachedHead=false sparse-checkout set --no-cone '/shared/mise/' 2>/dev/null || true
 	printf 'docs task layer pinned at %s\n' "$v"
 	exit 0
 fi
-
-if [ "$(git -C "$SHIM" describe --tags --exact-match 2>/dev/null || true)" != "$v" ]; then
-	git -C "$SHIM" fetch -q --depth 1 origin "+refs/tags/$v:refs/tags/$v"
-	git -C "$SHIM" -c advice.detachedHead=false checkout -q "$v"
+git -C "$SHIM" fetch -q --depth 1 origin "+refs/tags/$v:refs/tags/$v"
+if [ -z "$(git -C "$SHIM" ls-tree -r --name-only "refs/tags/$v^{}" -- shared/mise)" ]; then
+	printf 'kit-sync: tag %s ships no task layer (shared/mise first shipped in v0.2.0); current layer untouched\n' "$v" >&2
+	exit 3
 fi
-git -C "$SHIM" -c advice.detachedHead=false sparse-checkout set --no-cone '/shared/mise/' 2>/dev/null || true
+if [ "$boot" = 1 ]; then
+	# untracked leftovers of the payload (half-done pulls, init) abort `git
+	# checkout` even byte-identical ones; they are shadows of the payload and
+	# the checkout supplies canonical copies.
+	rm -rf "$SHIM/shared"
+fi
+git -C "$SHIM" -c advice.detachedHead=false checkout -q "$v"
+git -C "$SHIM" -c advice.detachedHead=false sparse-checkout set --no-cone '/shared/mise/'
 printf 'docs task layer pinned at %s\n' "$v"

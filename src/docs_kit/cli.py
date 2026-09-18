@@ -1,4 +1,10 @@
-"""docs-kit command line: init / refresh / check (pure file I/O)."""
+"""docs-kit command line: init / refresh / check / pull-tasks / serve.
+
+Doc generation is pure file I/O; the only subprocesses anywhere are the
+task-layer syncs (init's best-effort shim update and `pull-tasks`), which
+shell out to git to keep the pinned shared/mise payload at this CLI's tag,
+and `serve`, which runs Zensical's live-reload server (PATH first, uvx else).
+"""
 
 from __future__ import annotations
 
@@ -6,6 +12,9 @@ import argparse
 import json
 import os
 import re
+import shutil
+import socket
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,25 +29,40 @@ API_PAGE = "docs/references/api.md"
 ENDPOINTS_PAGE = "docs/references/endpoints.md"
 
 ZENSONFIG = "zensical.toml"
+ZENSICAL_VERSION = "0.0.62"
 WORKFLOW = ".github/workflows/docs.yml"
 GITIGNORE_ENTRIES = ("site/", ".cache/")
+MISE_GITIGNORE_ENTRIES = (".docs-kit/", "mise.local.toml")
 
-# Used only when this run is a legacy `uvx --from <local path>` bootstrap (the
-# wheel lives under the uv cache but the source tree is a local checkout).
-BAKED_KIT_HOME = "/Users/ladelaru/Dev/me/docs-kit"
-KIT_HOME_PLACEHOLDER = "PASTE-PATH-TO-DOCS-KIT-CHECKOUT-OR-REMOVE-THIS"
+DEFAULT_SHIM = ".docs-kit"
+DOCS_SNIPPET = "{{ vars.docs_kit }}/shared/mise/docs.toml"
+MISE_BLOCK_MARK = re.compile(r"^\s*docs_kit\s*=", re.M)
+KIT_REPO_URL = "git@github.com:ldelarue/docs-kit.git"
+
+RED, YELLOW, CYAN = "31", "33", "36"
+
+
+def _c(text: str, code: str) -> str:
+    """ANSI-color text only for an interactive, non-NO_COLOR stdout."""
+    if sys.stdout.isatty() and not os.environ.get("NO_COLOR"):
+        return f"\033[{code}m{text}\033[0m"
+    return text
 
 
 def _default_kit_home() -> str:
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        if (parent / ".git").exists() and (parent / "pyproject.toml").is_file():
-            return str(parent)
-    if os.environ.get("DOCS_KIT"):
-        return os.environ["DOCS_KIT"]
-    if ".cache" in str(here) and "/uv/" in str(here):
-        return BAKED_KIT_HOME
-    return KIT_HOME_PLACEHOLDER
+    """--docs-kit flag > DOCS_KIT env > .docs-kit shim default.
+
+    A running kit checkout does NOT become the default: `init` always wires
+    the pulled layer, so running the CLI from source (`uv run --project`)
+    behaves exactly like the installed wheel. Clone installs are explicit:
+    `--docs-kit /path/to/docs-kit` or the DOCS_KIT env.
+    """
+    return os.environ.get("DOCS_KIT") or DEFAULT_SHIM
+
+
+def _is_shim(kit_home: str) -> bool:
+    """A relative kit path is a repo-local .docs-kit layer to pull."""
+    return not Path(kit_home).is_absolute()
 
 
 def _read_spec(root: Path, spec_name: str) -> tuple[str, dict]:
@@ -114,277 +138,220 @@ def _scaffold_files(root: Path, spec_name: str) -> list[tuple[Path, str]]:
     ]
 
 
-def _insert_under_table(text: str, header_re: str, line: str) -> tuple[str, bool]:
-    """Insert `line` right below the first line matching header_re."""
-    m = re.search(rf"(?m)^{header_re}$", text)
-    if not m:
-        return text, False
-    idx = m.end() + 1
-    if text[idx : idx + len(line)] == line:
-        return text, True
-    return text[:idx] + line + "\n" + text[idx:], True
+def pull_tasks(root: Path, shim: str = DEFAULT_SHIM, version: str = __version__) -> str:
+    """Pin <root>/<shim> to tag v<version> (sparse: /shared/mise/); returns tag.
+
+    Prefers the kit-sync engine inside a materialized layer (canonical
+    implementation, itself versioned by pulls). The inline git fallback
+    bootstraps in place with `git init` + `remote add` - `git clone` refuses
+    non-empty directories, so a half-created shim dir never blocks it. A tag
+    whose payload lacks shared/mise entirely (v0.1.x and older, e.g. a pin
+    downgrade) is REJECTED without touching the existing layer. Set
+    DOCS_KIT_REPO to pull from another URL (tests).
+    """
+    ver = str(version).removeprefix("v")  # engine contract: bare version arg
+    tag = f"v{ver}"
+    url = os.environ.get("DOCS_KIT_REPO") or KIT_REPO_URL
+    shim_dir = root / shim
+    engine = shim_dir / "shared" / "mise" / "kit-sync"
+    env = {**os.environ, "GIT_SSH_COMMAND": "ssh -o BatchMode=yes"}
+    if engine.is_file():
+        rc = subprocess.run(["sh", str(engine), shim, ver], cwd=root, env=env).returncode
+        if rc != 0:
+            raise RuntimeError(f"kit-sync exited with {rc} (no payload at {tag}? layer left untouched)")
+        return tag
+
+    def git(*args: str) -> str:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=root,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if proc.returncode != 0:
+            err = proc.stderr.strip()
+            raise RuntimeError(f"`git {' '.join(args)}` failed: {err.splitlines()[-1] if err else 'no output'}")
+        return proc.stdout
+
+    bootstrap = not (shim_dir / ".git").exists()
+    if bootstrap:
+        shim_dir.mkdir(parents=True, exist_ok=True)
+        git("init", "-q", shim)
+        git("-C", shim, "remote", "add", "origin", url)
+    git("-C", shim, "fetch", "-q", "--depth", "1", "origin", f"+refs/tags/{tag}:refs/tags/{tag}")
+    if not git("-C", shim, "ls-tree", "-r", "--name-only", f"refs/tags/{tag}^{{}}", "--", "shared/mise").strip():
+        raise RuntimeError(
+            f"tag {tag} ships no task layer (shared/mise first shipped in v0.2.0); "
+            "the current layer was left untouched - upgrade the CLI past 0.1.x"
+        )
+    if bootstrap:
+        # untracked payload shadows (half-done pulls, init) abort `git checkout`
+        # even byte-identical ones; the checkout supplies canonical copies
+        shutil.rmtree(shim_dir / "shared", ignore_errors=True)
+    git("-C", shim, "-c", "advice.detachedHead=false", "checkout", "-q", tag)
+    git("-C", shim, "-c", "advice.detachedHead=false", "sparse-checkout", "set", "--no-cone", "/shared/mise/")
+    return tag
 
 
-OLD_BLOCK_MARKER = "### docs (block generated by docs-kit init"
-INCLUDE_TABLE_RE = r"\[task_config\]"
-INCLUDE_LINE = 'includes = ["{{ vars.docs_kit }}/shared/mise/docs.toml"]'
-DOCS_SNIPPET = "{{ vars.docs_kit }}/shared/mise/docs.toml"
-PULL_TASKS_MARKER = "docs:pull-tasks"
-_LOCAL_HEAD = "# docs-kit integration (generated by `docs-kit init --docs-kit {shim}`; put your own overrides ABOVE this block)"
-_DOCS_KIT_ENV_LINE = 'DOCS_KIT = "{{ vars.docs_kit }}"'
-_PULL_TASKS_RUN = r"""
-set -eu
-if [ -f {shim}/shared/mise/kit-sync ]; then
-  exec sh {shim}/shared/mise/kit-sync {shim}
-fi
-ver="$({ docs-kit --version 2>/dev/null || uv run --no-dev docs-kit --version; } 2>/dev/null | awk '{print $2}')"
-if [ -z "$ver" ]; then
-  echo "pull-tasks: no docs-kit on PATH or uv project here; install the CLI first (kit README section 1)" >&2
-  exit 1
-fi
-v="v$ver"
-if [ ! -d {shim} ]; then
-  git clone -q -c advice.detachedHead=false --depth 1 --branch "$v" \
-    --filter=blob:none --sparse git@github.com:ldelarue/docs-kit.git {shim}
-  git -C {shim} -c advice.detachedHead=false sparse-checkout set --no-cone '/shared/mise/'
-fi
-if [ "$(git -C {shim} describe --tags --exact-match 2>/dev/null || true)" != "$v" ]; then
-  git -C {shim} fetch -q --depth 1 origin "+refs/tags/$v:refs/tags/$v"
-  git -C {shim} -c advice.detachedHead=false checkout -q "$v"
-fi
-git -C {shim} -c advice.detachedHead=false sparse-checkout set --no-cone '/shared/mise/' 2>/dev/null || true
-echo "docs task layer pinned at $v (frozen fallback; kit-sync engine file arrives with a later release)"
-"""
+def cmd_pull_tasks(root: Path, kit_home: str) -> int:
+    """docs-kit pull-tasks: bootstrap/update the shim task layer."""
+    if not _is_shim(kit_home):
+        print(f"checkout install ({kit_home}): nothing to pull")
+        return 0
+    try:
+        tag = pull_tasks(root, kit_home)
+    except (RuntimeError, OSError) as exc:
+        print(f"ERROR: could not sync the task layer: {exc}", file=sys.stderr)
+        return 1
+    print(f"docs task layer pinned at {tag}")
+    return 0
 
 
-def _is_kit_shim(kit_home: str) -> bool:
-    """True when the recorded docs_kit path is a repo-local download shim."""
-    return bool(kit_home) and kit_home != KIT_HOME_PLACEHOLDER and not Path(kit_home).is_absolute()
+def _port_free(port: int, host: str) -> bool:
+    """True when nothing currently binds host:port (mirrors the serve bind)."""
+    family = socket.AF_INET if ":" not in host else socket.AF_INET6
+    with socket.socket(family, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind((host, port))
+        except OSError:
+            return False
+    return True
 
 
-def _pull_tasks_block(shim: str) -> str:
+def _lease_port(preferred: int, host: str) -> int:
+    """PREFERRED when free, else the first free port in FREE_PORT_MIN..FREE_PORT_MAX."""
+    try:
+        lo = int(os.environ.get("FREE_PORT_MIN", "8000"))
+        hi = int(os.environ.get("FREE_PORT_MAX", "8999"))
+    except ValueError:
+        sys.exit("ERROR: FREE_PORT_MIN/FREE_PORT_MAX must be integers")
+    if not 1 <= lo <= hi <= 65535:
+        sys.exit(f"ERROR: bad port range {lo}-{hi}")
+    if 1 <= preferred <= 65535 and _port_free(preferred, host):
+        return preferred
+    for port in range(lo, hi + 1):
+        if _port_free(port, host):
+            return port
+    sys.exit(f"ERROR: no free TCP port in {lo}-{hi} (preferred {preferred} is in use)")
+
+
+def cmd_serve(root: Path, port: int | None, host: str) -> int:
+    """Live-reload serve: pinned port (--port/$DOCS_PORT), else leased (prefers 8010)."""
+    pinned = port if port is not None else None
+    if pinned is None and (env := os.environ.get("DOCS_PORT")):
+        if not env.isdigit():
+            sys.exit(f"ERROR: DOCS_PORT must be an integer (got: {env})")
+        pinned = int(env)
+    chosen = pinned if pinned is not None else _lease_port(8010, host)
+    dev_addr = f"{host}:{chosen}"
+    server = ["zensical", "serve", "--dev-addr", dev_addr]
+    if not shutil.which("zensical"):
+        server = ["uvx", "--from", f"zensical=={ZENSICAL_VERSION}", *server]
+    if not any(shutil.which(c) for c in ("zensical", "uvx")):
+        sys.exit("ERROR: neither zensical nor uvx is on PATH; install uv or zensical")
+    print(f"serving docs on http://{dev_addr} (Ctrl-C to stop)")
+    try:
+        return subprocess.run(server, cwd=root).returncode
+    except FileNotFoundError as exc:
+        sys.exit(f"ERROR: cannot start the docs server: {exc}")
+
+
+def _mise_block(kit_home: str) -> str:
+    """The comment-free block users copy into their own mise config (opt-in)."""
     return (
-        f'[tasks."{PULL_TASKS_MARKER}"]\n'
-        'description = "Fetch docs-kit task files (shared/mise) at the installed CLI\'s tag"\n'
-        + "run = '''\n"
-        + _PULL_TASKS_RUN.replace("{shim}", shim).lstrip("\n")
-        + "'''\n"
+        "[vars]\n"
+        f'docs_kit = "{kit_home}"\n\n[env]\n'
+        'DOCS_KIT = "{{ vars.docs_kit }}"\n\n[task_config]\n'
+        f'includes = ["{DOCS_SNIPPET}"]\n'
     )
 
 
-def _local_shim_block(shim: str) -> str:
-    return (
-        _LOCAL_HEAD.replace("{shim}", shim)
-        + "\n[vars]\n"
-        + f'docs_kit = "{shim}"\n\n[env]\n'
-        + _DOCS_KIT_ENV_LINE
-        + "\n\n[task_config]\n"
-        + f'includes = ["{DOCS_SNIPPET}"]\n\n'
-        + _pull_tasks_block(shim)
-    )
-
-_BLOCK_ANNOTATION = """
-### docs integration (generated by docs-kit init; see docs-kit README) ###
-# The docs:* task BODIES live in the docs-kit clone at
-#   <docs-kit>/shared/mise/docs.toml
-# included below - single source: updating that file (a `git pull` in the
-# clone) updates every consumer repo instantly. Never duplicate them here.
-# Docs tasks suddenly missing? Re-run `docs-kit init` - it repairs this block.
-# Per-machine clone path: override in mise.local.toml (add it to .gitignore):
-#   [vars]
-#   docs_kit = "/your/path/to/docs-kit"
-"""
+_LEGACY_MISE_RE = re.compile(
+    r"^\s*(docs_kit\s*=|DOCS_KIT\s*=)|docs\.toml|docs:(?:pull-tasks|kit-sync)|### docs "
+)
 
 
-def _ensure_key(
-    text: str,
-    table_label: str,
-    table_re: str,
-    key: str,
-    line: str,
-    to_append: list[tuple[str, str]],
-) -> str:
-    """Guarantee the assignment `line` for `key` inside its table."""
-    if line in text:
-        print(f"  .mise.toml: `{key}` already set, kept")
-        return text
-    m = re.search(rf"(?m)^\s*{re.escape(key)}\s*=.*$", text)
-    if m:
-        text = text[: m.start()] + line + text[m.end() :]
-        print(f"  .mise.toml: rewrote `{key}` (value changed)")
-        return text
-    if re.search(rf"(?m)^{table_re}$", text):
-        text, _ = _insert_under_table(text, table_re, line)
-        print(f"  .mise.toml: added `{key}`")
-    else:
-        to_append.append((table_label, line))
-    return text
-
-
-def _ensure_include(
-    text: str, snippet: str, to_append: list[tuple[str, str]]
-) -> str:
-    """Guarantee `snippet` is one entry of the (single-line) includes array."""
-    if snippet in text:
-        print(f"  .mise.toml: include `{snippet.rsplit('/', 1)[-1]}` already set, kept")
-        return text
-    m = re.search(r"(?m)^includes = \[.*\]$", text)
-    if m:
-        text = text[: m.start()] + m.group(0)[:-1] + f', "{snippet}"]' + text[m.end() :]
-        print(f"  .mise.toml: added `{snippet.rsplit('/', 1)[-1]}` to existing includes")
-        return text
-    for i, (table, line) in enumerate(to_append):
-        if table == "task_config" and line.startswith("includes = ["):
-            to_append[i] = (table, line[:-1] + f', "{snippet}"]')
-            return text
-    to_append.append(("task_config", f'includes = ["{snippet}"]'))
-    return text
-
-
-_LOCAL_HEAD_MARK = "# docs-kit integration (generated"
-
-
-def _strip_shim_lines(text: str, shim: str) -> str:
-    """Drop previously generated shim lines; they live in mise.local.toml now."""
-    removed = False
-
-    def drop(t: str, pattern: str, label: str, eol: bool = True) -> str:
-        nonlocal removed
-        new_t, n = re.subn(rf"(?m){pattern}" + (r"\n" if eol else ""), "", t)
-        if n:
-            removed = True
-            print(f"  .mise.toml: removed generated `{label}` (now in mise.local.toml)")
-        return new_t
-
-    text = drop(text, re.escape(f'docs_kit = "{shim}"'), "docs_kit")
-    text = drop(text, re.escape(_DOCS_KIT_ENV_LINE), "DOCS_KIT")
-    text = drop(text, re.escape(INCLUDE_LINE), "docs include")
-    for alt in (
-        '", "' + re.escape(DOCS_SNIPPET) + '"',
-        '"' + re.escape(DOCS_SNIPPET) + '", "',
-    ):
-        text = drop(text, alt, "docs include entry")
-    text = drop(
-        text,
-        r'\[tasks\."docs:(?:kit-sync|pull-tasks)"\][^\n]*\n(?:.*\n)*?(?=^\[|\Z)',
-        "generated sync/pull task",
-        eol=False,
-    )
-    text = drop(text, r'"docs:(?:kit-sync|pull-tasks)" = \{.*\}\n?', "generated sync/pull task", eol=False)
-    if removed:
-        lines = text.splitlines(keepends=True)
-        keep, i, headers = [], 0, {"[vars]", "[env]", "[task_config]"}
-        while i < len(lines):
-            stripped = lines[i].strip()
-            if stripped in headers:
-                j = i + 1
-                while j < len(lines) and not lines[j].strip().startswith("["):
-                    body = lines[j].strip()
-                    if body and not body.startswith("#"):
-                        break
-                    j += 1
-                if j >= len(lines) or lines[j].strip().startswith("["):
-                    i += 1  # section empty -> drop the header line
-                    continue
-            keep.append(lines[i])
-            i += 1
-        text = "".join(keep)
-    return text
-
-
-def _integrate_local_shim(root: Path, shim: str) -> None:
-    path = root / "mise.local.toml"
-    block = _local_shim_block(shim)
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
-    i = text.find(_LOCAL_HEAD_MARK)
-    if i != -1:
-        if PULL_TASKS_MARKER in text[i:]:
-            print("  mise.local.toml: replaced previously generated block")
-        text = text[:i]
-    text = text.rstrip("\n")
-    if text:
-        text += "\n\n"
-    _write(path, text + block)
-    print("  mise.local.toml: generated docs-kit integration (kept out of git)")
-
-
-def _integrate_mise(root: Path, kit_home: str) -> None:
+def _report_legacy_mise_lines(root: Path) -> None:
+    """Point at old init-generated .mise.toml lines; never rewrite the file."""
     path = root / ".mise.toml"
-    text = path.read_text(encoding="utf-8") if path.exists() else ""
-    migrated = False
-
-    # Migrate the old duplicated-tasks block to the shared form when possible.
-    if INCLUDE_LINE not in text and OLD_BLOCK_MARKER in text:
-        idx = text.index(OLD_BLOCK_MARKER)
-        old_tail = text[idx:]
-        foreign = [
-            line
-            for line in old_tail.splitlines()
-            if re.match(r'\[tasks\.', line) and "docs:" not in line
-        ]
-        if foreign:
-            print(
-                "  ERROR: old docs block found, but foreign tasks follow it in\n"
-                "  .mise.toml; move your own [tasks.*] entries ABOVE the\n"
-                "  '### docs' marker, then re-run docs-kit init to migrate."
-            )
-            return
-        text = text[:idx].rstrip("\n") + "\n"
-        migrated = True
-
-    # uv must exist (tasks use uvx fallbacks; the pypi backend installs via uv).
-    if not re.search(r'(?m)^\s*uv\s=', text):
-        header = r'\[tools\]'
-        if re.search(rf"(?m)^{header}$", text):
-            text, _ = _insert_under_table(text, header, 'uv = "latest"')
-        else:
-            text = '[tools]\nuv = "latest"\n\n' + text
-
-    needed = (
-        f'docs_kit = "{kit_home}"',
-        _DOCS_KIT_ENV_LINE,
-        DOCS_SNIPPET,
-    )
-    if _is_kit_shim(kit_home):
-        text = _strip_shim_lines(text, kit_home)
-        _write(path, text)
-        _integrate_local_shim(root, kit_home)
+    if not path.is_file():
         return
-    if DOCS_SNIPPET in text and OLD_BLOCK_MARKER not in text and all(line in text for line in needed):
-        print("  .mise.toml: docs integration present, left untouched")
+    hits = [ln for ln in path.read_text(encoding="utf-8").splitlines() if _LEGACY_MISE_RE.search(ln)]
+    if not hits:
         return
-
-    to_append: list[tuple[str, str]] = []
-    text = _ensure_key(text, "vars", r"\[vars\]", "docs_kit", f'docs_kit = "{kit_home}"', to_append)
-    text = _ensure_key(
-        text, "env", r"\[env\]", "DOCS_KIT", 'DOCS_KIT = "{{ vars.docs_kit }}"', to_append
-    )
-    text = _ensure_include(text, DOCS_SNIPPET, to_append)
-
-    if to_append:
-        tables: dict[str, list[str]] = {}
-        for table, line in to_append:
-            tables.setdefault(table, []).append(line)
-        block = _BLOCK_ANNOTATION + "".join(
-            f"\n[{t}]\n" + "\n".join(lines) + "\n" for t, lines in tables.items()
+    print(
+        _c(
+            "cleanup - old docs-kit lines in .mise.toml (init never writes\n"
+            "  .mise.toml anymore; remove these by hand):",
+            RED,
         )
-        text = text.rstrip("\n") + "\n" + block
-    _write(path, text)
-    print("  updated .mise.toml (" + ("migrated to shared tasks" if migrated else "docs integration") + ")")
-    if kit_home == KIT_HOME_PLACEHOLDER:
+    )
+    for ln in hits:
+        print(f"    {ln.strip()}")
+    print('    (tables above: also delete their "description"/"run" body lines)')
+
+
+def _mise_opt_in(root: Path) -> str:
+    """The user's mise config(s) as pasted, if any - read-only, never written."""
+    text = ""
+    for name in ("mise.local.toml", ".mise.toml", "mise.toml"):
+        path = root / name
+        if path.is_file():
+            text += path.read_text(encoding="utf-8")
+    return text
+
+
+def _print_mise_next_steps(root: Path, block: str) -> None:
+    current = _mise_opt_in(root)
+    shown = None
+    if not MISE_BLOCK_MARK.search(current):
+        shown = (
+            _c("next step - copy-paste this block once into a mise config file,", CYAN),
+            _c("  or merge its three keys into the tables you already have:", CYAN),
+        )
+    elif block.strip() not in current:
+        shown = (
+            _c(
+                "note - the docs-kit keys in your mise config are OUTDATED or hand-edited;\n"
+                "  replace them with:",
+                YELLOW,
+            ),
+        )
+    if shown:
+        for line in shown:
+            print(line)
+        print(block.rstrip("\n"))
         print(
-            f"  WARNING: vars.docs_kit is '{KIT_HOME_PLACEHOLDER}' because this\n"
-            "  init run could not detect a docs-kit checkout. Replace the value\n"
-            "  with the absolute path of your clone (or override it via\n"
-            "  mise.local.toml). See docs-kit README."
+            _c(
+                "  (keep only ONE [vars], [env] and [task_config] header each - a duplicate\n"
+                "   is invalid TOML and mise then skips the whole file)",
+                YELLOW,
+            )
         )
+    print(_c("then verify and commit: mise run docs:refresh && mise run docs:build", CYAN))
 
 
-def _integrate_gitignore(root: Path, extra: tuple[str, ...] = ()) -> None:
+def _mise_step(root: Path, kit_home: str) -> None:
+    _report_legacy_mise_lines(root)
+    block = _mise_block(kit_home)
+    if _is_shim(kit_home) and not os.environ.get("DOCS_KIT_SKIP_PULL"):
+        try:
+            tag = pull_tasks(root, kit_home)
+            print(f"  task layer: {kit_home}/ shared/mise pinned at {tag}")
+        except (RuntimeError, OSError) as exc:
+            print(_c(f"  WARNING: task layer sync failed: {exc}", YELLOW))
+            print("  docs:* tasks stay unavailable/reverted until the pull succeeds;")
+            print("  retry with `docs-kit pull-tasks` (init itself completed fine).")
+    _print_mise_next_steps(root, block)
+
+
+def _integrate_gitignore(root: Path, use_mise: bool) -> None:
     path = root / ".gitignore"
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     lines = text.splitlines()
-    entries = GITIGNORE_ENTRIES + tuple(e for e in extra if e and e not in GITIGNORE_ENTRIES)
+    entries = GITIGNORE_ENTRIES + (MISE_GITIGNORE_ENTRIES if use_mise else ())
     added = [e for e in entries if e not in lines]
     if not added:
         print("  .gitignore: already covers", ", ".join(entries))
@@ -397,13 +364,17 @@ def _integrate_gitignore(root: Path, extra: tuple[str, ...] = ()) -> None:
     print(f"  .gitignore: added {', '.join(added)}")
 
 
-def cmd_init(root: Path, spec_name: str, force: bool, kit_home: str) -> int:
+def cmd_init(root: Path, spec_name: str, force: bool, kit_home: str, use_mise: bool = True) -> int:
     """Install or repair the docs integration (idempotent).
 
-    - missing files            -> written
-    - byte-identical files     -> skipped
-    - existing files that differ (hand edits) -> only overwritten with --force
-    - missing mise/gitignore parts -> re-added (repairs a deleted block)
+    - missing files                             -> written
+    - byte-identical files                      -> skipped
+    - existing files that differ (hand edits)   -> only overwritten with --force
+    - .mise.toml / mise.local.toml              -> NEVER written or modified;
+      legacy generated lines are reported for manual removal
+    - mise mode (default) additionally prints the opt-in mise.local.toml
+      block and, for shim installs, pins shared/mise into <kit-home>/
+      (DOCS_KIT_SKIP_PULL=1 skips the sync; checkout installs never pull)
     """
     scaffold = [(p, c, "scaffold") for p, c in _scaffold_files(root, spec_name)]
     generated = [(p, c, "generated") for p, c in _generated_outputs(root, spec_name)]
@@ -438,14 +409,18 @@ def cmd_init(root: Path, spec_name: str, force: bool, kit_home: str) -> int:
         print(f"  unchanged {rel}")
     if not plan:
         print("  scaffold already complete (nothing to write)")
-    _integrate_gitignore(
-        root,
-        ()
-        if not _is_kit_shim(kit_home)
-        else (kit_home.rstrip("/") + "/", "mise.local.toml"),
-    )
-    _integrate_mise(root, kit_home)
-    print("done. Next: `mise run docs:refresh` to verify, then commit.")
+    if use_mise:
+        _mise_step(root, kit_home)
+    else:
+        print(
+            _c(
+                "  mise integration skipped (--without-mise); re-run docs-kit init\n"
+                "  without the flag to add the docs:* task layer",
+                CYAN,
+            )
+        )
+    _integrate_gitignore(root, use_mise)
+    print("done.")
     return 0
 
 
@@ -461,18 +436,40 @@ def main(argv: list[str] | None = None) -> int:
     p_init = sub.add_parser("init", help="scaffold a Zensical docs site in a repo")
     common(p_init)
     p_init.add_argument("--force", action="store_true", help="overwrite scaffold files")
-    p_init.add_argument("--docs-kit", default=_default_kit_home(), help="path recorded as $DOCS_KIT")
+    p_init.add_argument("--without-mise", action="store_true",
+                        help="skip all mise integration (no task-layer pull, no opt-in block to paste)")
+    p_init.add_argument(
+        "--docs-kit",
+        default=_default_kit_home(),
+        help="path recorded as vars.docs_kit (default: $DOCS_KIT or the .docs-kit shim; pass a clone path for checkout mode)",
+    )
     p_refresh = sub.add_parser("refresh", help="regenerate all generated docs files")
     common(p_refresh)
     p_check = sub.add_parser("check", help="fail if generated docs files are stale")
     common(p_check)
+    p_pull = sub.add_parser("pull-tasks", help="pin the .docs-kit task layer to this CLI's version")
+    p_pull.add_argument("root", nargs="?", default=".", help="target repo (default: cwd)")
+    p_serve = sub.add_parser("serve", help="serve the docs with live reload (Zensical)")
+    p_serve.add_argument("root", nargs="?", default=".", help="target repo (default: cwd)")
+    p_serve.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="exact port to bind (default: $DOCS_PORT, else prefer 8010, then first free "
+        "port in $FREE_PORT_MIN-$FREE_PORT_MAX)",
+    )
+    p_serve.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
 
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
     if args.command == "init":
-        return cmd_init(root, args.spec, args.force, args.docs_kit)
+        return cmd_init(root, args.spec, args.force, args.docs_kit, use_mise=not args.without_mise)
+    if args.command == "serve":
+        return cmd_serve(root, args.port, args.host)
     if args.command == "refresh":
         return cmd_refresh(root, args.spec)
+    if args.command == "pull-tasks":
+        return cmd_pull_tasks(root, _default_kit_home())
     return cmd_check(root, args.spec)
 
 

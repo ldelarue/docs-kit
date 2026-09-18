@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import shutil
+import socket
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -9,7 +12,14 @@ import pytest
 from docs_kit import cli
 
 FIXTURES = Path(__file__).parent / "fixtures"
+KIT = Path(__file__).resolve().parents[1]
 SPEC = "openapi.json"
+
+
+@pytest.fixture(autouse=True)
+def _skip_layer_pull(monkeypatch):
+    """init never shells out to git in tests (the file:// tests opt back in)."""
+    monkeypatch.setenv("DOCS_KIT_SKIP_PULL", "1")
 
 
 def make_repo(base: Path, name: str, fixture: str) -> Path:
@@ -26,6 +36,10 @@ def strip_spec_prose(text: str) -> str:
         "<title>",
     )
     return "\n".join(l for l in text.splitlines() if not any(l.startswith(k) for k in keep))
+
+
+def generated_rels():
+    return (cli.VENDORED_SPEC, cli.SWAGGER_PAGE, cli.API_PAGE, cli.ENDPOINTS_PAGE)
 
 
 def test_both_specs_render_identical_pages(tmp_path):
@@ -45,10 +59,6 @@ def test_refresh_is_byte_stable(tmp_path):
     assert cli.cmd_refresh(repo, SPEC) == 0
     after = {rel: (repo / rel).read_bytes() for rel in generated_rels()}
     assert before == after
-
-
-def generated_rels():
-    return (cli.VENDORED_SPEC, cli.SWAGGER_PAGE, cli.API_PAGE, cli.ENDPOINTS_PAGE)
 
 
 def test_check_detects_stale_and_missing(tmp_path):
@@ -73,9 +83,9 @@ def test_check_drifts_when_spec_changes(tmp_path):
     assert cli.cmd_check(repo, SPEC) == 1
 
 
-def test_init_scaffolds_then_is_idempotent(tmp_path):
+def test_init_scaffolds_without_touching_mise(tmp_path, capsys):
     repo = make_repo(tmp_path, "repo", "golang.openapi.json")
-    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
     for rel in (
         "docs/index.md",
         "docs/tutorials/index.md",
@@ -87,156 +97,294 @@ def test_init_scaffolds_then_is_idempotent(tmp_path):
         *generated_rels(),
     ):
         assert (repo / rel).is_file(), rel
-    assert (repo / ".gitignore").exists()
-    ign = (repo / ".gitignore").read_text()
-    assert "site/" in ign and ".cache/" in ign
     cfg = tomllib.loads((repo / "zensical.toml").read_text())
     assert cfg["project"]["site_name"] == "golang-api-playground"
     assert cfg["project"]["nav"][0] == {"Home": "index.md"}
-    mise = (repo / ".mise.toml").read_text()
-    assert 'docs_kit = "/tmp/kit-home"' in mise
-    assert 'DOCS_KIT = "{{ vars.docs_kit }}"' in mise
-    assert 'includes = ["{{ vars.docs_kit }}/shared/mise/docs.toml"]' in mise
-    assert 'run = "go run' not in mise  # no task bodies duplicated here
-    assert 'uv = "latest"' in mise
-    before = (repo / ".mise.toml").read_bytes()
-    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0  # repair no-op
-    assert (repo / ".mise.toml").read_bytes() == before
-    assert cli.cmd_init(repo, SPEC, True, "/tmp/kit-home") == 0
-    assert (repo / ".mise.toml").read_bytes() == before
+    # the user's mise configs are never written, and no block template file
+    # exists - .docs-kit/ is reserved for the pulled task layer only
+    assert not (repo / ".mise.toml").exists()
+    assert not (repo / "mise.local.toml").exists()
+    assert not (repo / ".docs-kit").exists()  # pull skipped (DOCS_KIT_SKIP_PULL)
+    ign = (repo / ".gitignore").read_text().split()
+    assert {"site/", ".cache/", ".docs-kit/", "mise.local.toml"} <= set(ign)
+    out = capsys.readouterr().out
+    block = cli._mise_block(".docs-kit")
+    assert tomllib.loads(block)["task_config"]["includes"] == ["{{ vars.docs_kit }}/shared/mise/docs.toml"]
+    assert block.rstrip("\n") in out  # the exact block body is printed, comment-free...
+    assert not any(ln.lstrip().startswith("#") for ln in block.splitlines())
+    assert "copy-paste" in out  # ...for manual copy, phrased as "a mise config", never as
+    assert "auto-loads" not in out  # mise.local.toml heredoc wiring (old message shape)
+    before = (repo / ".gitignore").read_bytes()
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0  # repair no-op
+    assert before == (repo / ".gitignore").read_bytes()
+    assert cli.cmd_init(repo, SPEC, True, ".docs-kit") == 0  # --force changes nothing either
+    assert before == (repo / ".gitignore").read_bytes()
+    assert not (repo / ".mise.toml").exists()
+    assert not (repo / ".docs-kit").exists()
 
 
-def test_init_shim_mode_moves_integration_to_local_file(tmp_path):
+def test_init_default_kit_home_is_the_shim(tmp_path, monkeypatch):
+    # the CLI may live in a checkout; the default must STILL be the pullable
+    # shim so `uv run --project <kit> docs-kit init` wires the task layer
+    monkeypatch.delenv("DOCS_KIT", raising=False)
+    assert cli._default_kit_home() == ".docs-kit"
+
+
+def test_init_checkout_mode_records_absolute_kit_path(tmp_path, capsys, monkeypatch):
     repo = make_repo(tmp_path, "repo", "golang.openapi.json")
-    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
-    tracked = (repo / ".mise.toml").read_text()
-    local = (repo / "mise.local.toml").read_text()
-    assert "docs:pull-tasks" not in tracked
-    assert cli.DOCS_SNIPPET not in tracked
-    cfg = tomllib.loads(local)
-    assert cfg["vars"]["docs_kit"] == ".docs-kit"
-    assert cfg["task_config"]["includes"] == [cli.DOCS_SNIPPET]
-    pull = cfg["tasks"]["docs:pull-tasks"]
-    assert "sparse-checkout set --no-cone '/shared/mise/'" in pull["run"]
-    assert "exec sh .docs-kit/shared/mise/kit-sync" in pull["run"]  # engine fast-path
-    ign = (repo / ".gitignore").read_text()
-    assert ".docs-kit/" in ign and "mise.local.toml" in ign
-    before = (repo / ".mise.toml").read_bytes(), (repo / "mise.local.toml").read_bytes()
-    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0  # idempotent
-    assert before == ((repo / ".mise.toml").read_bytes(), (repo / "mise.local.toml").read_bytes())
-    # migrating away from an old tracked shim integration: lines are removed
-    old_mise = repo / ".mise.toml"
-    old_mise.write_text(
-        '[vars]\ndocs_kit = ".docs-kit"\n\n[env]\nDOCS_KIT = "{{ vars.docs_kit }}"\n\n'
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("checkout mode must never sync a task layer")
+
+    monkeypatch.setattr(cli, "pull_tasks", _boom)
+    monkeypatch.delenv("DOCS_KIT_SKIP_PULL", raising=False)
+    assert cli.cmd_init(repo, SPEC, False, "/abs/docs-kit-checkout") == 0
+    out = capsys.readouterr().out
+    assert 'docs_kit = "/abs/docs-kit-checkout"' in out
+    assert not (repo / ".mise.toml").exists()
+    assert not (repo / ".docs-kit").exists()  # checkout mode creates nothing
+
+
+def test_init_reports_legacy_mise_lines_but_never_rewrites(tmp_path, capsys):
+    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
+    legacy = (
+        '[vars]\nuv_python = "3.12"\ndocs_kit = "/tmp/old-kit"\n\n'
+        '[env]\nFOO = "1"\nDOCS_KIT = "{{ vars.docs_kit }}"\n\n'
         '[task_config]\nincludes = ["{{ vars.docs_kit }}/shared/mise/docs.toml"]\n\n'
-        '[tasks."docs:kit-sync"]\ndescription = "x"\nrun = "y"\n\n[tasks.dev]\nrun = "go run ."\n'
+        "# docs-kit integration generated block\n"
+        'docs_kit = ".docs-kit"\n'
+        '[tasks."docs:pull-tasks"]\ndescription = "old"\nrun = "echo old"\n'
+        '[tasks.mine]\nrun = "go run ."\n'
     )
+    mise = repo / ".mise.toml"
+    mise.write_text(legacy)
+    before = mise.read_bytes()
     assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
-    migrated = old_mise.read_text()
-    assert "docs:kit-sync" not in migrated and cli.DOCS_SNIPPET not in migrated
-    assert "docs_kit" not in migrated and "[tasks.dev]" in migrated
-    assert "docs:pull-tasks" in (repo / "mise.local.toml").read_text()
+    out = capsys.readouterr().out
+    for quoted in (
+        'docs_kit = "/tmp/old-kit"',
+        'DOCS_KIT = "{{ vars.docs_kit }}"',
+        "{{ vars.docs_kit }}/shared/mise/docs.toml",
+        '[tasks."docs:pull-tasks"]',
+    ):
+        assert quoted in out, quoted
+    assert "FOO" not in out  # foreign user lines are never reported
+    assert "go run" not in out
+    assert mise.read_bytes() == before  # init never rewrites .mise.toml
 
 
-def test_init_repairs_deleted_tasks_block(tmp_path):
+def test_opt_in_hints_on_existing_mise_local(tmp_path, capsys):
     repo = make_repo(tmp_path, "repo", "golang.openapi.json")
-    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
-    mise_path = repo / ".mise.toml"
-    mise_path.write_text(
-        mise_path.read_text().split("### docs")[0].rstrip() + "\n"
-    )  # user deleted the integration block on purpose
-    assert "docs_kit" not in mise_path.read_text()
-    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
-    mise = mise_path.read_text()
-    assert "docs_kit" in mise and "task_config" in mise
-    assert cli.cmd_check(repo, SPEC) == 0
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
+    block = cli._mise_block(".docs-kit")
+    # consumer pasted the printed heredoc (their own config above it)
+    before = '[tools]\nuv = "latest"\n\n'
+    (repo / "mise.local.toml").write_text(before + block)
+    capsys.readouterr()
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
+    out = capsys.readouterr().out
+    assert "copy-paste" not in out and "OUTDATED" not in out  # opt-in detected
+    assert (repo / "mise.local.toml").read_text() == before + block  # untouched
+    # an old-shape block (stale docs_kit value) asks for a replace
+    old = "# docs-kit integration (generated by `docs-kit init --docs-kit .docs-kit`)\n[vars]\ndocs_kit = \".old\"\n"
+    (repo / "mise.local.toml").write_text(old)
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
+    assert "OUTDATED or hand-edited" in capsys.readouterr().out
+    assert (repo / "mise.local.toml").read_text() == old  # still untouched
 
 
-def test_init_repairs_missing_env_line(tmp_path):
+def test_init_without_mise(tmp_path, capsys):
     repo = make_repo(tmp_path, "repo", "golang.openapi.json")
-    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
-    mise_path = repo / ".mise.toml"
-    text = mise_path.read_text()
-    text = text.replace('DOCS_KIT = "{{ vars.docs_kit }}"\n', "")
-    assert "DOCS_KIT" not in text and "docs.toml" in text  # include still there
-    mise_path.write_text(text)
-    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
-    assert 'DOCS_KIT = "{{ vars.docs_kit }}"' in mise_path.read_text()
-    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
-    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
-    (repo / ".mise.toml").write_text(
-        '[tasks.dev]\nrun = "true"\n\n'
-        "### docs (block generated by docs-kit init; delete to remove) ###\n"
-        '[env]\nDOCS_KIT = "/old/path"\n\n'
-        '[tasks."docs:refresh"]\nrun = "echo old"\n'
-        '[tasks."docs:check"]\nrun = "echo old"\n'
-    )
-    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
-    mise = (repo / ".mise.toml").read_text()
-    assert "docs_kit" in mise and "task_config" in mise
-    assert 'run = "echo old"' not in mise          # old block replaced
-    assert '[tasks.dev]' in mise                    # foreign tasks preserved
+    mise = repo / ".mise.toml"
+    mise.write_text('[tools]\nuv = "latest"\n\ndocs_kit = ".docs-kit"\n')
+    before = mise.read_bytes()
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit", use_mise=False) == 0
+    out = capsys.readouterr().out
+    assert "--without-mise" in out
+    assert "cleanup" not in out and "copy-paste" not in out and "docs_kit" not in out
+    assert not (repo / ".docs-kit").exists()  # no dir, no template, no layer
+    assert not (repo / "mise.local.toml").exists()
+    ign = (repo / ".gitignore").read_text().split()
+    assert "site/" in ign and ".cache/" in ign
+    assert ".docs-kit/" not in ign and "mise.local.toml" not in ign
+    for rel in (
+        "docs/index.md", "docs/tutorials/index.md", "docs/guides/index.md",
+        "docs/explanation/index.md", "docs/references/index.md", "zensical.toml",
+        ".github/workflows/docs.yml", *generated_rels(),
+    ):
+        assert (repo / rel).is_file(), rel
+    assert mise.read_bytes() == before
 
 
-def test_init_migration_refused_with_foreign_tasks_below(tmp_path):
-    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
-    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
-    (repo / ".mise.toml").write_text(
-        "### docs (block generated by docs-kit init; delete to remove) ###\n"
-        '[tasks."docs:refresh"]\nrun = "echo old"\n\n'
-        '[tasks."mine"]\nrun = "mine"\n'
-    )
-    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
-    assert '[tasks."mine"]' in (repo / ".mise.toml").read_text()
-    assert "docs_kit" not in (repo / ".mise.toml").read_text()  # refused, untouched
+def test_shared_docs_toml_ships_pull_tasks():
+    tasks = tomllib.loads((KIT / "shared/mise/docs.toml").read_text())
+    assert {"docs:init", "docs:refresh", "docs:build", "docs:serve", "docs:check", "docs:pull-tasks"} <= set(tasks)
+    run = tasks["docs:pull-tasks"]["run"]
+    assert 'exec sh "$shim/shared/mise/kit-sync" "$shim"' in run  # engine fast-path
+    assert 'sparse-checkout set --no-cone "/shared/mise/"' in run
+    assert "nothing to pull" in run  # checkout installs ($DOCS_KIT absolute): exit-0 guard
+
+
+def make_tagged_kit(base: Path) -> Path:
+    """Throwaway kit repo: v0.1.0 predates the payload, v9.9.9 ships shared/mise.
+
+    The real clone carries no release tags until release-please cuts one,
+    so pull tests must never depend on tags of the repo they live in.
+    """
+    kit = base / "kit"
+    kit.mkdir()
+
+    def git(*args):
+        subprocess.run(
+            ("git", *args), cwd=kit, check=True, capture_output=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},
+        )
+
+    (kit / "README.md").write_text("kit before the payload\n")
+    git("init", "-q", "-b", "main", ".")
+    git("add", "-A")
+    git("commit", "-q", "-m", "pre-payload")
+    git("tag", "v0.1.0")
+    (kit / "shared/mise").mkdir(parents=True)
+    shutil.copy(KIT / "shared/mise/kit-sync", kit / "shared/mise/kit-sync")
+    (kit / "shared/mise/docs.toml").write_text('"docs:x" = { run = "true" }\n')
+    git("add", "-A")
+    git("commit", "-q", "-m", "task layer")
+    git("tag", "v9.9.9")
+    return kit
+
+
+def test_pull_tasks_bootstraps_shim_in_place(tmp_path, monkeypatch):
+    monkeypatch.setenv("DOCS_KIT_REPO", "file://" + str(make_tagged_kit(tmp_path)))
+    repo = tmp_path / "consumer"
+    shim = repo / ".docs-kit"
+    shim.mkdir(parents=True)
+    (shim / "stray.txt").write_text("dir already existed without a checkout\n")
+    assert cli.pull_tasks(repo, ".docs-kit", "9.9.9") == "v9.9.9"
+    assert (shim / "shared/mise/docs.toml").is_file()  # payload materialized around it
+    assert not (shim / "src").exists()  # sparse: only /shared/mise/
+    assert "dir already existed" in (shim / "stray.txt").read_text()
+    assert cli.pull_tasks(repo, ".docs-kit", "9.9.9") == "v9.9.9"  # idempotent re-pin
+    # a missing dir is also fine (pull creates it)
+    repo2 = tmp_path / "consumer2"
+    assert cli.pull_tasks(repo2, ".docs-kit", "9.9.9") == "v9.9.9"
+
+
+def test_pull_tasks_uses_engine_fast_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("DOCS_KIT_REPO", "file://" + str(make_tagged_kit(tmp_path)))
+    repo = tmp_path / "consumer"
+    shim = repo / ".docs-kit"
+    (shim / "shared/mise").mkdir(parents=True)
+    shutil.copy(KIT / "shared/mise/kit-sync", shim / "shared/mise/kit-sync")
+    (shim / "stray.txt").write_text("dir already existed without a checkout\n")
+    assert cli.pull_tasks(repo, ".docs-kit", "9.9.9") == "v9.9.9"
+    assert (shim / "shared/mise/docs.toml").is_file()  # engine bootstrapped in place
+    assert (shim / "shared/mise/kit-sync").read_text() == (KIT / "shared/mise/kit-sync").read_text()  # shadow replaced by the payload copy
+    assert "dir already existed" in (shim / "stray.txt").read_text()
+
+
+@pytest.mark.parametrize("setup_engine", [False, True])
+def test_pull_tasks_refuses_tag_without_payload(tmp_path, monkeypatch, setup_engine):
+    """v0.1.x tags predate shared/mise - pulling one must never wipe a layer."""
+    monkeypatch.setenv("DOCS_KIT_REPO", "file://" + str(make_tagged_kit(tmp_path)))
+    repo = tmp_path / "consumer"
+    assert cli.pull_tasks(repo, ".docs-kit", "9.9.9") == "v9.9.9"
+    if setup_engine:
+        shutil.copy(KIT / "shared/mise/kit-sync", repo / ".docs-kit/shared/mise/kit-sync")
+    with pytest.raises(RuntimeError, match="no task layer|kit-sync exited"):
+        cli.pull_tasks(repo, ".docs-kit", "0.1.0")
+    assert git_describe(repo / ".docs-kit") == "v9.9.9"  # layer untouched
+    assert (repo / ".docs-kit/shared/mise/docs.toml").is_file()
+
+
+def git_describe(path):
+    import subprocess
+
+    return subprocess.run(
+        ["git", "-C", str(path), "describe", "--tags", "--exact-match"],
+        capture_output=True, text=True,
+    ).stdout.strip()
 
 
 def test_init_refuses_hand_edits(tmp_path):
     repo = make_repo(tmp_path, "repo", "golang.openapi.json")
-    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
     (repo / "zensical.toml").write_text("[project]\nsite_name = 'mine'\n")
     with pytest.raises(SystemExit):
-        cli.cmd_init(repo, SPEC, False, "/tmp/kit-home")
+        cli.cmd_init(repo, SPEC, False, ".docs-kit")
     assert (repo / "zensical.toml").read_text().startswith("[project]")  # untouched
-    assert cli.cmd_init(repo, SPEC, True, "/tmp/kit-home") == 0
+    assert cli.cmd_init(repo, SPEC, True, ".docs-kit") == 0
     assert "golang-api-playground" in (repo / "zensical.toml").read_text()
     drifted = repo / cli.ENDPOINTS_PAGE
     drifted.write_text(drifted.read_text() + "\ndrift\n")
     with pytest.raises(SystemExit):
-        cli.cmd_init(repo, SPEC, False, "/tmp/kit-home")
+        cli.cmd_init(repo, SPEC, False, ".docs-kit")
     assert cli.cmd_refresh(repo, SPEC) == 0  # generated files are refresh's job
-    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
-
-
-def test_init_merges_existing_mise_tables(tmp_path):
-    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
-    (repo / ".mise.toml").write_text('[env]\nFOO = "1"\n\n[tools]\nrestish = "latest"\n')
-    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
-    cfg = tomllib.loads((repo / ".mise.toml").read_text())
-    assert cfg["tools"]["uv"] == "latest"
-    assert cfg["tools"]["restish"] == "latest"
-    assert cfg["env"]["FOO"] == "1"
-    assert cfg["env"]["DOCS_KIT"] == "{{ vars.docs_kit }}"  # templated at use, not write
-    assert cfg["vars"]["docs_kit"] == "/tmp/kit-home"
-    assert cfg["task_config"]["includes"] == ["{{ vars.docs_kit }}/shared/mise/docs.toml"]
-    assert (repo / ".mise.toml").read_text().count("[env]") == 1
-
-
-def test_init_rewrites_moved_kit_home_in_place(tmp_path):
-    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
-    mise_path = repo / ".mise.toml"
-    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
-    assert cli.cmd_init(repo, SPEC, False, "/new/kit-home") == 0  # clone moved
-    mise = mise_path.read_text()
-    assert mise.count('\ndocs_kit = "') == 1  # rewritten in place, never duplicated
-    cfg = tomllib.loads(mise)
-    assert cfg["vars"]["docs_kit"] == "/new/kit-home"
-    assert cfg["env"]["DOCS_KIT"] == "{{ vars.docs_kit }}"
-    assert cfg["task_config"]["includes"] == ["{{ vars.docs_kit }}/shared/mise/docs.toml"]
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
 
 
 def test_init_requires_spec(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     with pytest.raises(SystemExit):
-        cli.cmd_init(repo, SPEC, False, "/tmp/kit-home")
+        cli.cmd_init(repo, SPEC, False, ".docs-kit")
+
+
+def _fake_server(monkeypatch):
+    calls = []
+
+    class _Done:
+        returncode = 0
+
+    monkeypatch.setattr(cli.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or _Done())
+    return calls
+
+
+def test_serve_pinned_via_flag(tmp_path, monkeypatch):
+    monkeypatch.delenv("DOCS_PORT", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda n: f"/usr/bin/{n}")
+    calls = _fake_server(monkeypatch)
+    assert cli.main(["serve", str(tmp_path), "--port", "9998"]) == 0
+    assert calls == [["zensical", "serve", "--dev-addr", "127.0.0.1:9998"]]
+
+
+def test_serve_pinned_via_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("DOCS_PORT", "9997")
+    monkeypatch.setattr(cli.shutil, "which", lambda n: f"/usr/bin/{n}")
+    calls = _fake_server(monkeypatch)
+    assert cli.main(["serve", str(tmp_path)]) == 0
+    assert calls == [["zensical", "serve", "--dev-addr", "127.0.0.1:9997"]]
+
+
+def test_serve_leases_around_a_busy_preferred(tmp_path, monkeypatch):
+    monkeypatch.delenv("DOCS_PORT", raising=False)
+    monkeypatch.setenv("FREE_PORT_MIN", "8010")
+    monkeypatch.setenv("FREE_PORT_MAX", "8015")
+    monkeypatch.setattr(cli.shutil, "which", lambda n: f"/usr/bin/{n}")
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as busy:
+        busy.bind(("127.0.0.1", 8010))
+        expected = next(p for p in range(8011, 8016) if cli._port_free(p, "127.0.0.1"))
+        calls = _fake_server(monkeypatch)
+        assert cli.main(["serve", str(tmp_path)]) == 0
+    assert calls == [["zensical", "serve", "--dev-addr", f"127.0.0.1:{expected}"]]
+
+
+def test_serve_falls_back_to_uvx_pin(tmp_path, monkeypatch):
+    monkeypatch.setenv("DOCS_PORT", "9996")
+    monkeypatch.setattr(
+        cli.shutil, "which", lambda n: None if n == "zensical" else f"/usr/bin/{n}"
+    )
+    calls = _fake_server(monkeypatch)
+    assert cli.main(["serve", str(tmp_path)]) == 0
+    assert calls == [
+        ["uvx", "--from", f"zensical=={cli.ZENSICAL_VERSION}",
+         "zensical", "serve", "--dev-addr", "127.0.0.1:9996"]
+    ]
+
+
+def test_serve_without_any_server_tool_exits(tmp_path, monkeypatch):
+    monkeypatch.setenv("DOCS_PORT", "9995")
+    monkeypatch.setattr(cli.shutil, "which", lambda n: None)
+    with pytest.raises(SystemExit):
+        cli.main(["serve", str(tmp_path)])

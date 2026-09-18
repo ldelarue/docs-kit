@@ -3,4 +3,4 @@
 Pure file I/O -- the package never shells out to external toolchains.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"

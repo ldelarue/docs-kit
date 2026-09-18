@@ -166,9 +166,15 @@ def _integrate_mise(root: Path, kit_home: str, spec_name: str) -> None:
         text = text[:idx].rstrip("\n") + "\n"
         migrated = True
 
-    if INCLUDE_LINE in text:
-        print("  .mise.toml: shared-tasks integration present, left untouched")
-        return
+    if INCLUDE_LINE in text and OLD_BLOCK_MARKER not in text:
+        needed = (
+            f'docs_kit = "{kit_home}"',
+            'DOCS_KIT = "{{ vars.docs_kit }}"',
+            INCLUDE_LINE,
+        )
+        if all(line in text for line in needed):
+            print("  .mise.toml: shared-tasks integration present, left untouched")
+            return
 
     # uv must exist (tasks use uvx fallbacks; the pypi backend installs via uv).
     if not re.search(r'(?m)^\s*uv\s=', text):

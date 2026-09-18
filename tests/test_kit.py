@@ -119,7 +119,16 @@ def test_init_repairs_deleted_tasks_block(tmp_path):
     assert cli.cmd_check(repo, SPEC) == 0
 
 
-def test_init_migrates_old_duplicated_block(tmp_path):
+def test_init_repairs_missing_env_line(tmp_path):
+    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
+    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
+    mise_path = repo / ".mise.toml"
+    text = mise_path.read_text()
+    text = text.replace('DOCS_KIT = "{{ vars.docs_kit }}"\n\n', "")
+    assert "DOCS_KIT" not in text and "docs.toml" in text  # include still there
+    mise_path.write_text(text)
+    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
+    assert 'DOCS_KIT = "{{ vars.docs_kit }}"' in mise_path.read_text()
     repo = make_repo(tmp_path, "repo", "golang.openapi.json")
     assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
     (repo / ".mise.toml").write_text(

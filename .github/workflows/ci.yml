@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # mise reads .mise.toml, so the runner gets the exact tools the pre-commit
+      # hook uses (hk, ruff, shellcheck) instead of a hand-maintained step list.
+      - uses: jdx/mise-action@v4
+
+      - name: hk validate
+        run: hk validate
+
+      # Same steps as hk.pkl's pre-commit hook (ruff format, ruff check,
+      # shellcheck) over every file, read-only: a hook skipped with --no-verify
+      # still fails here.
+      - name: hk check --all
+        run: hk check --all
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-caching: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: pytest
+        run: uv run pytest
+
+      - name: lease-port self-tests (shellcheck + port behavior)
+        run: sh tests/test_lease_port.sh
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Build wheel + sdist
+        run: uv build
+
+      - name: Upload dist/ artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-kit-dist
+          path: dist/

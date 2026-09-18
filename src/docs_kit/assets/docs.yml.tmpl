@@ -1,0 +1,80 @@
+name: Documentation
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # CI has no personal clone: the [vars].docs_kit path in .mise.toml does not
+  # exist on runners, so the [task_config].includes line is silently skipped
+  # and every docs:* task VANISHES (mise reports "no task docs:check found" -
+  # not "missing path"). Fix = check out docs-kit PINNED TO A TAG and override
+  # the path via mise.local.toml before mise-action runs.
+  # One-time setup: create a fine-grained DOCS_KIT_PAT (contents: read on
+  # ldelarue/docs-kit) as a secret of THIS repo.
+  # After each docs-kit release: bump kit-ref BELOW in BOTH jobs (known tags:
+  # git ls-remote --tags https://github.com/ldelarue/docs-kit.git).
+  check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # --- docs-kit, tag-pinned (keep in sync with the deploy job) ---
+      - uses: actions/checkout@v7
+        with:
+          repository: ldelarue/docs-kit
+          path: .docs-kit
+          token: ${{ secrets.DOCS_KIT_PAT }}
+          ref: v0.1.0
+      - run: printf '[vars]\ndocs_kit = "%s/.docs-kit"\n[env]\nDOCS_KIT = "{{ vars.docs_kit }}"\n[task_config]\nincludes = ["{{ vars.docs_kit }}/shared/mise/docs.toml"]\n' "$GITHUB_WORKSPACE" > mise.local.toml
+
+      - uses: jdx/mise-action@v3
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: uv-${{ runner.os }}-
+      - run: mise run docs:check
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/configure-pages@v6
+      - uses: actions/checkout@v7
+
+      # --- docs-kit, tag-pinned (keep in sync with the check job) ---
+      - uses: actions/checkout@v7
+        with:
+          repository: ldelarue/docs-kit
+          path: .docs-kit
+          token: ${{ secrets.DOCS_KIT_PAT }}
+          ref: v0.1.0
+      - run: printf '[vars]\ndocs_kit = "%s/.docs-kit"\n[env]\nDOCS_KIT = "{{ vars.docs_kit }}"\n[task_config]\nincludes = ["{{ vars.docs_kit }}/shared/mise/docs.toml"]\n' "$GITHUB_WORKSPACE" > mise.local.toml
+
+      - uses: jdx/mise-action@v3
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: uv-${{ runner.os }}-
+      - run: mise run docs:build
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+      - uses: actions/deploy-pages@v5
+        id: deployment

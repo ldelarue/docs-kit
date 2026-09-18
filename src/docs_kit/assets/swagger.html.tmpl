@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title} – OpenAPI reference</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.min.css">
+<style>
+  html, body {{ margin: 0; padding: 0; background: #fff; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+</style>
+</head>
+<body>
+<div id="swagger-ui"></div>
+<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.min.js"></script>
+<script>
+  // Follow the system color scheme with the Swagger UI dark theme.
+  var scheme = matchMedia("(prefers-color-scheme: dark)");
+  function applyTheme() {{
+    document.documentElement.classList.toggle("dark", scheme.matches);
+    document.body.classList.toggle("dark", scheme.matches);
+  }}
+  applyTheme();
+  if (scheme.addEventListener) scheme.addEventListener("change", applyTheme);
+
+  window.ui = SwaggerUIBundle({{
+    url: "openapi.json",
+    dom_id: "#swagger-ui",
+  }});
+</script>
+</body>
+</html>

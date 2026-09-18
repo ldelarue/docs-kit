@@ -1,0 +1,66 @@
+#!/bin/sh
+# Print a free TCP port to stdout (nothing else goes to stdout - safe for $( )).
+#
+#   lease-port [PREFERRED]
+#
+# With PREFERRED given: print it when nothing LISTENs on it, otherwise fall
+# back to scanning the range. Without: scan FREE_PORT_MIN..FREE_PORT_MAX
+# (defaults 8000..8999) ascending and print the first free port.
+# Exit 1 when the range holds no free port.
+#
+# Caveats (by design): the check covers LISTEN sockets visible to the current
+# user (unprivileged lsof on Linux may not see other users' sockets), and a
+# port taken between this check and the caller's bind (TOCTOU) surfaces as a
+# bind error in the runtime - just run again, you get the next port.
+
+set -eu
+
+min="${FREE_PORT_MIN:-8000}"
+max="${FREE_PORT_MAX:-8999}"
+preferred="${1:-}"
+
+die() {
+	printf 'lease-port: %s\n' "$1" >&2
+	exit 1
+}
+
+is_uint() {
+	case "$1" in
+	'') return 1 ;;
+	*[!0-9]*) return 1 ;;
+	*) return 0 ;;
+	esac
+}
+
+command -v lsof >/dev/null 2>&1 || die "lsof is required but not on PATH"
+is_uint "$min" || die "FREE_PORT_MIN must be a positive integer (got: $min)"
+is_uint "$max" || die "FREE_PORT_MAX must be a positive integer (got: $max)"
+[ "$min" -le "$max" ] || die "empty port range: FREE_PORT_MIN=$min > FREE_PORT_MAX=$max"
+[ -z "$preferred" ] || is_uint "$preferred" || die "preferred port must be a positive integer (got: $preferred)"
+
+# One lsof snapshot for the whole scan: every localhost TCP port with a
+# process in LISTEN state (IPv4 and IPv6; names always end ":<port>" under -nP).
+busy=" $(lsof -nP -iTCP -sTCP:LISTEN -Fn 2>/dev/null | sed -n 's/^n.*:\([0-9]\{1,5\}\)$/\1/p' | sort -u | tr '\n' ' ')"
+
+is_free() {
+	case "$busy" in
+	*" $1 "*) return 1 ;;
+	*) return 0 ;;
+	esac
+}
+
+if [ -n "$preferred" ] && is_free "$preferred"; then
+	printf '%s\n' "$preferred"
+	exit 0
+fi
+
+port="$min"
+while [ "$port" -le "$max" ]; do
+	if is_free "$port"; then
+		printf '%s\n' "$port"
+		exit 0
+	fi
+	port=$((port + 1))
+done
+
+die "no free TCP port in $min-$max${preferred:+ (preferred port $preferred is in use)}"

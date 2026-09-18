@@ -1,0 +1,37 @@
+name: Publish
+
+# Attach the built wheels to the GitHub Release created by release-please,
+# so consumers can `gh release download vX.Y.Z -p '*.whl'` or uv-add them.
+# (GitHub has no PyPI/pip index; the release assets + git tag pins are the
+# registry flow here — and publishing to PyPI is a non-goal.)
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  release-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Build wheel + sdist
+        run: uv build
+
+      - name: Attach dist/ to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+        # The `latest` branch is NOT moved here - release-please's GITHUB_TOKEN
+        # never fires this workflow's own trigger (see release.yml), and when a
+        # RELEASE_PLEASE_TOKEN does make it fire, the ref is already correct:
+        # Release moved it in the run that created the tag.

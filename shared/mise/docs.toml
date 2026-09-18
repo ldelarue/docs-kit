@@ -1,0 +1,31 @@
+# Shared mise tasks + shared/scripts/, single-sourced from the docs-kit clone.
+# Opt-in wiring (nothing is ever written into your .mise.toml): `docs-kit init`
+# generates the small block below into .docs-kit/mise.local.toml, and you
+# append it to the repo's own git-ignored mise.local.toml (mise auto-loads
+# that file):
+#   touch mise.local.toml && grep -qF docs-kit mise.local.toml || cat .docs-kit/mise.local.toml >> mise.local.toml
+# It sets [vars].docs_kit / [env].DOCS_KIT and includes this file via
+# {{ vars.docs_kit }} - pointing at the pulled .docs-kit layer or a full clone.
+# NOTE: uv-shim consumers only pull /shared/mise/ (sparse), which is fine:
+# everything beyond the task bodies (port leasing, the zensical run) lives
+# inside the docs-kit CLI, so behaviour is identical for shim and clone
+# installs.
+# Editing THIS file (or shared/scripts/ next to it) updates every consumer
+# repo at once: nothing is copied or cached - changes apply on the very next
+# `mise run` in any consumer repo (re-run `docs-kit init` afterwards to
+# refresh the generated block).
+# Tasks run in the consumer repo's root (config_root). $DOCS_KIT is provided
+# by the consumer's [env] (templated from [vars].docs_kit) - the bodies use
+# it to reach the scripts in this same clone.
+
+"docs:init" = { description = "Scaffold this repo or repair the shared-tasks integration block", run = 'if command -v docs-kit >/dev/null 2>&1; then docs-kit init; else uv run --no-dev --project "${DOCS_KIT/#\~/$HOME}" docs-kit init; fi' }
+
+"docs:refresh" = { description = "Re-export the OpenAPI spec and regenerate reference pages", run = 'mise run openapi && if command -v docs-kit >/dev/null 2>&1; then docs-kit refresh; else uv run --no-dev --project "${DOCS_KIT/#\~/$HOME}" docs-kit refresh; fi' }
+
+"docs:build" = { description = "Refresh, then build the static site into site/", run = 'mise run docs:refresh && if command -v zensical >/dev/null 2>&1; then zensical build --clean; else uvx --from "zensical==0.0.62" zensical build --clean; fi' }
+
+"docs:serve" = { description = "Serve the docs with live reload on http://127.0.0.1:$PORT (prefers 8010, falls back to the first free port in 8000-8999; pin exactly via DOCS_PORT)", run = 'if command -v docs-kit >/dev/null 2>&1; then docs-kit serve; else uv run --no-dev --project "${DOCS_KIT/#\~/$HOME}" docs-kit serve; fi' }
+
+"docs:check" = { description = "Fail when generated docs are stale (for CI and git hooks)", run = 'mise run openapi && if command -v docs-kit >/dev/null 2>&1; then docs-kit check; else uv run --no-dev --project "${DOCS_KIT/#\~/$HOME}" docs-kit check; fi && git diff --exit-code -- docs openapi.json' }
+
+"docs:pull-tasks" = { description = "Pin the .docs-kit task layer (shared/mise) to the installed CLI's version", run = 'set -eu; shim="${DOCS_KIT:-.docs-kit}"; [ -n "$shim" ] || shim=".docs-kit"; case "$shim" in /*) echo "checkout install ($shim): nothing to pull - the tasks live in the clone"; exit 0 ;; esac; if [ ! -d "$shim/.git" ]; then mkdir -p "$shim" && git init -q "$shim" && git -C "$shim" remote add origin "${DOCS_KIT_REPO:-git@github.com:ldelarue/docs-kit.git}"; fi; if [ -f "$shim/shared/mise/kit-sync" ]; then exec sh "$shim/shared/mise/kit-sync" "$shim"; fi; ver="$( { docs-kit --version 2>/dev/null || uv run --no-dev docs-kit --version 2>/dev/null; } )" || true; ver="${ver##* }"; if [ -z "$ver" ]; then echo "pull-tasks: no docs-kit on PATH or uv project here; install the CLI first (README: install)" >&2; exit 1; fi; v="v$ver"; if [ "$(git -C "$shim" describe --tags --exact-match 2>/dev/null || true)" != "$v" ]; then git -C "$shim" fetch -q --depth 1 origin "+refs/tags/$v:refs/tags/$v"; git -C "$shim" -c advice.detachedHead=false checkout -q "$v"; fi; git -C "$shim" -c advice.detachedHead=false sparse-checkout set --no-cone "/shared/mise/" >/dev/null 2>&1 || true; echo "docs task layer pinned at $v"' }

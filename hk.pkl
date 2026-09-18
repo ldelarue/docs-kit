@@ -1,0 +1,14 @@
+amends "package://github.com/jdx/hk/releases/download/v2.0.1/hk@2.0.1#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.0.1/hk@2.0.1#/Builtins.pkl"
+
+// Tools come from mise (.mise.toml): hk install --mise launches through
+// `mise x`, CI runs `mise install` first. Both ruff steps select python files
+// by type; shellcheck also matches the extensionless shebang scripts under
+// shared/ and tests/.
+steps {
+  ["ruff-format"] = Builtins.ruff_format
+  ["ruff"] = (Builtins.ruff) {
+    depends = "ruff-format"
+  }
+  ["shellcheck"] = Builtins.shellcheck
+}

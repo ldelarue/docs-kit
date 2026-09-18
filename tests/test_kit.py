@@ -125,7 +125,7 @@ def test_init_repairs_missing_env_line(tmp_path):
     assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
     mise_path = repo / ".mise.toml"
     text = mise_path.read_text()
-    text = text.replace('DOCS_KIT = "{{ vars.docs_kit }}"\n\n', "")
+    text = text.replace('DOCS_KIT = "{{ vars.docs_kit }}"\n', "")
     assert "DOCS_KIT" not in text and "docs.toml" in text  # include still there
     mise_path.write_text(text)
     assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
@@ -186,10 +186,21 @@ def test_init_merges_existing_mise_tables(tmp_path):
     assert cfg["env"]["FOO"] == "1"
     assert cfg["env"]["DOCS_KIT"] == "{{ vars.docs_kit }}"  # templated at use, not write
     assert cfg["vars"]["docs_kit"] == "/tmp/kit-home"
-    assert cfg["task_config"]["includes"] == [
-        "{{ vars.docs_kit }}/shared/mise/docs.toml"
-    ]
+    assert cfg["task_config"]["includes"] == ["{{ vars.docs_kit }}/shared/mise/docs.toml"]
     assert (repo / ".mise.toml").read_text().count("[env]") == 1
+
+
+def test_init_rewrites_moved_kit_home_in_place(tmp_path):
+    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
+    mise_path = repo / ".mise.toml"
+    assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0
+    assert cli.cmd_init(repo, SPEC, False, "/new/kit-home") == 0  # clone moved
+    mise = mise_path.read_text()
+    assert mise.count('\ndocs_kit = "') == 1  # rewritten in place, never duplicated
+    cfg = tomllib.loads(mise)
+    assert cfg["vars"]["docs_kit"] == "/new/kit-home"
+    assert cfg["env"]["DOCS_KIT"] == "{{ vars.docs_kit }}"
+    assert cfg["task_config"]["includes"] == ["{{ vars.docs_kit }}/shared/mise/docs.toml"]
 
 
 def test_init_requires_spec(tmp_path):

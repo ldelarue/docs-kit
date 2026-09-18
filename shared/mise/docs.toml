@@ -1,15 +1,19 @@
-# Shared mise tasks, single-sourced from the docs-kit clone.
+# Shared mise tasks + shared/scripts/, single-sourced from the docs-kit clone.
 # Consumer repos reference this file via [task_config].includes with
 # {{ vars.docs_kit }} pointing at this clone - see docs-kit README.
-# Editing THIS file updates every consumer repo at once; run `mise install`
-# nothing, changes apply on the very next `mise run` in any consumer repo.
+# Editing THIS file (or shared/scripts/ next to it) updates every consumer
+# repo at once: nothing is copied or cached - changes apply on the very next
+# `mise run` in any consumer repo.
 # Tasks run in the consumer repo's root (config_root). $DOCS_KIT is provided
-# by the consumer's [env] (templated from [vars].docs_kit).
+# by the consumer's [env] (templated from [vars].docs_kit) - the bodies use
+# it to reach the scripts in this same clone.
 
 "docs:init" = { description = "Scaffold this repo or repair the shared-tasks integration block", run = 'if command -v docs-kit >/dev/null 2>&1; then docs-kit init; else uv run --no-dev --project "${DOCS_KIT/#\~/$HOME}" docs-kit init; fi' }
 
 "docs:refresh" = { description = "Re-export the OpenAPI spec and regenerate reference pages", run = 'mise run openapi && if command -v docs-kit >/dev/null 2>&1; then docs-kit refresh; else uv run --no-dev --project "${DOCS_KIT/#\~/$HOME}" docs-kit refresh; fi' }
 
 "docs:build" = { description = "Refresh, then build the static site into site/", run = 'mise run docs:refresh && if command -v zensical >/dev/null 2>&1; then zensical build --clean; else uvx --from "zensical==0.0.62" zensical build --clean; fi' }
+
+"docs:serve" = { description = "Serve the docs with live reload on http://127.0.0.1:$PORT (prefers 8010, falls back to the first leasable port in 8000-8999; pin exactly via DOCS_PORT)", run = 'PORT="${DOCS_PORT:-$(sh "$DOCS_KIT/shared/scripts/lease-port" 8010)}"; if command -v zensical >/dev/null 2>&1; then zensical serve --dev-addr "127.0.0.1:$PORT"; else uvx --from "zensical==0.0.62" zensical serve --dev-addr "127.0.0.1:$PORT"; fi' }
 
 "docs:check" = { description = "Fail when generated docs are stale (for CI and git hooks)", run = 'mise run openapi && if command -v docs-kit >/dev/null 2>&1; then docs-kit check; else uv run --no-dev --project "${DOCS_KIT/#\~/$HOME}" docs-kit check; fi && git diff --exit-code -- docs openapi.json' }

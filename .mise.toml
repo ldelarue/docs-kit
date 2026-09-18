@@ -1,0 +1,8 @@
+[tools]
+python = "3.12"
+uv = "latest"
+
+[tasks.test]
+description = "Run the test suite"
+dir = "{{cwd}}"
+run = "uv run pytest"

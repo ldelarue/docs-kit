@@ -1,0 +1,46 @@
+[project]
+site_name = {site_name}
+site_description = {site_description}
+# Required by instant navigation; replace with the real URL before publishing.
+site_url = "https://example.com"
+
+# Diataxis structure: the top-level nav entries become header tabs
+# (navigation.tabs feature). API reference pages are GENERATED -- see README.
+nav = [
+  {{ "Home" = "index.md" }},
+  {{ "Tutorials" = ["tutorials/index.md"] }},
+  {{ "Guides" = ["guides/index.md"] }},
+  {{ "Explanation" = ["explanation/index.md"] }},
+  {{ "References" = [
+    "references/index.md",
+    {{ "API" = ["references/api.md", "references/endpoints.md"] }},
+  ] }},
+]
+
+[project.theme]
+language = "en"
+features = [
+  "content.code.copy",
+  "content.tabs.link",
+  "navigation.footer",
+  "navigation.instant",           # site_url is required
+  "navigation.sections",
+  "navigation.tabs",              # Diataxis tabs in the header
+  "navigation.tabs.sticky",
+  "navigation.tracking",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+scheme = "default"
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+
+[project.markdown_extensions]
+toc.permalink = true
+footnotes = {{}}
+pymdownx.superfences.custom_fences = [
+  {{ name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" }},
+]
+pymdownx.tabbed.alternate_style = true

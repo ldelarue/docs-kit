@@ -76,7 +76,8 @@ docs-kit --version
 ```bash
 # commit conventional prefixes: feat:=minor  fix:=patch  docs:/chore:=nothing
 # GitHub Actions -> Release -> Run workflow -> merge the release PR it opens
-# tag + wheel assets + `latest` branch move are automated afterwards
+# the tag + `latest` branch move happen in that same run; wheel assets only
+# once publish.yml gets a RELEASE_PLEASE_TOKEN (see CONTRIBUTING - CI)
 ```
 
 Release tags are recreated by the workflow once its release PR is merged (all pre-reset tags were

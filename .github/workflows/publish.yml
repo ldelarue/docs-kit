@@ -31,8 +31,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
-
-      - name: Move the latest ref to this release
-        # Branch (not tag!): uv treats tags as immutable, so a movable
-        # `@latest` dep pin only re-resolves if it points at a branch.
-        run: git push -f origin "HEAD:refs/heads/latest"
+        # The `latest` branch is NOT moved here - release-please's GITHUB_TOKEN
+        # never fires this workflow's own trigger (see release.yml), and when a
+        # RELEASE_PLEASE_TOKEN does make it fire, the ref is already correct:
+        # Release moved it in the run that created the tag.

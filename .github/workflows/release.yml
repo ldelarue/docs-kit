@@ -10,16 +10,55 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+      sha: ${{ steps.rp.outputs.sha }}
     steps:
       # Never runs on its own: trigger manually (Actions -> Release -> Run
       # workflow). It then opens/updates a release PR bumping
-      # pyproject.toml + __version__ together, and merging that PR tags
-      # vX.Y.Z and creates the GitHub Release.
-      # Note: GITHUB_TOKEN cannot trigger CI on the PRs it opens. If branch
-      # protection requires the CI check on release PRs, create a PAT with
-      # contents+pull-requests write, store it as RELEASE_PLEASE_TOKEN, and
-      # pass it via with.token below.
-      - uses: googleapis/release-please-action@v5
+      # pyproject.toml + __version__ together, and a re-run after that PR merges
+      # tags vX.Y.Z and creates the GitHub Release.
+      # GITHUB_TOKEN also hides everything it creates from Actions: the release
+      # PR gets no CI checks and the tag fires no `release`/`push` event (the
+      # action's own README says `release.created` will not run either), which
+      # is why the `latest` move below lives in this run instead of on an
+      # event. For CI checks on release PRs - and to let publish.yml see the
+      # release at all - create a PAT with contents+pull-requests write, store
+      # it as RELEASE_PLEASE_TOKEN, and pass it via with.token below.
+      - uses: googleapis/release-please-action@v4
+        id: rp
         with:
           config-file: .release-please-config.json
           manifest-file: .release-please-manifest.json
+          # token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+  move-latest:
+    # The floating half of the pinning model: `latest` is a branch, not a tag,
+    # because uv re-resolves a branch pin on `uv tool upgrade` - so the
+    # README's `@latest` installs only follow a release when this pointer
+    # moves. It moves here, in the run that made the tag, since neither the tag
+    # push nor release.created can wake a workflow (see the note above); on an
+    # event-based trigger the ref would quietly stop following. Pushing the
+    # sha release-please tagged - never main's tip - keeps unreleased commits
+    # invisible through the ref people install from.
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the tagged commit must be local to be pushed as a ref
+
+      - name: Move latest to ${{ needs.release-please.outputs.tag_name }}
+        env:
+          SHA: ${{ needs.release-please.outputs.sha }}
+        run: |
+          if [ -z "$SHA" ]; then
+            echo "::error::release_created was true but the action reported no sha"
+            exit 1
+          fi
+          git log -1 --format='moving to %H %s' "$SHA"
+          echo "latest before: $(git ls-remote origin refs/heads/latest)"
+          git push -f origin "${SHA}:refs/heads/latest"
+          echo "latest after:  $(git ls-remote origin refs/heads/latest)"

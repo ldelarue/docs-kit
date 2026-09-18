@@ -11,18 +11,20 @@ permissions:
   contents: read
 
 jobs:
-  # The runner has no personal docs-kit clone: .mise.toml's [env] DOCS_KIT is a
-  # local path that does not exist here. Each job MUST check the kit repo out
-  # and override DOCS_KIT, otherwise the docs tasks fail. Create a
-  # fine-grained DOCS_KIT_PAT (contents: read on ldelarue/docs-kit) secret for
-  # the private kit repo, then add to BOTH jobs (before mise-action):
+  # CI has no personal clone: the [vars].docs_kit path in .mise.toml does not
+  # exist on runners, so the [task_config].includes line is silently skipped
+  # and every docs:* task VANISHES (mise reports "no task docs:check found" -
+  # not "missing path"). Fix = check out the private kit repo and override the
+  # path via mise.local.toml before mise-action runs. Create a fine-grained
+  # DOCS_KIT_PAT (contents: read on ldelarue/docs-kit) secret, then add to
+  # BOTH jobs (before mise-action):
   #   - uses: actions/checkout@v7
   #     with:
   #       repository: ldelarue/docs-kit
   #       path: .docs-kit
   #       token: ${{ secrets.DOCS_KIT_PAT }}
-  #       # ref: v0.1.1     # optional: freeze CI; default = default branch
-  #   plus at job level:  env: { DOCS_KIT: ${{ github.workspace }}/.docs-kit }
+  #       # ref: v0.1.3     # optional: freeze the kit version in CI
+  #   - run: printf '[vars]\ndocs_kit = "%s/.docs-kit"\n' "$GITHUB_WORKSPACE" > mise.local.toml
   # Details: docs-kit ROADMAP.md, Phase 2 step 4.
   check:
     if: github.event_name == 'pull_request'

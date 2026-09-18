@@ -59,10 +59,12 @@ anything shelling out to git) reuses the gh credential helper; or use the
    - create a fine-grained `DOCS_KIT_PAT` secret (read `contents` on
      `ldelarue/docs-kit`);
    - apply the commented CI recipe at the top of
-     `.github/workflows/docs.yml`: a kit checkout step +
-     `env: { DOCS_KIT: ${{ github.workspace }}/.docs-kit }`.
-   - CI clones the kit repo **at the default branch** (drifts with pushes —
-     fine); to freeze CI, add `ref: v0.1.1` to that checkout step. `mise run
+     `.github/workflows/docs.yml`: a kit checkout step + writing
+     `[vars] docs_kit = "$GITHUB_WORKSPACE/.docs-kit"` into
+     `mise.local.toml` (the include path must resolve on the runner or the
+     docs tasks silently vanish).
+   - CI checks the kit repo **at the default branch** (drifts with pushes —
+     fine); to freeze CI, add `ref: v0.1.3` to that checkout step. `mise run
      docs:check` on PRs then guards docs staleness, deploy builds `site/` on
      main.
 
@@ -88,10 +90,11 @@ mise run docs:refresh && git diff docs/        # see exactly what changed
 mise run docs:check && git commit -am "docs: regenerated with docs-kit <ref>"
 ```
 
-- The clone is self-refreshing for `mise run docs:*` (project install
-  revalidates by source mtime) — no reinstall needed unless you also did
-  `uv tool install` (then re-run it, or uninstall; the `command -v` branch
-  would freeze the old copy otherwise).
+- The clone is self-refreshing for `mise run docs:*` (both the task
+  definitions in `shared/mise/docs.toml` and the Python sources re-validate
+  from the clone on every `mise run`) — no reinstall needed unless you also
+  did `uv tool install` (then re-run it, or uninstall; the `command -v`
+  branch would freeze the old binary otherwise).
 - Rollback = `git checkout <older-tag-or-commit>` in the clone and refresh.
 - Never `git pull` blindly inside a CI/docs-refresh assumption of stability:
   CI never has your personal clone anyway (it checks out its own); only the

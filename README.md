@@ -31,21 +31,35 @@ design).
 `init` requires `openapi.json` to exist first (it reads `info.title` for the
 site title): run the repo's `mise run openapi` before `docs-kit init`.
 
-## Consuming repos
+## Consuming repos: shared tasks, zero duplication
 
-After `docs-kit init`, a repo contains only markdown, `zensical.toml`,
-`openapi.json`, the `.mise.toml` block and the CI workflow — no Python project
-lifecycle at all. The mise tasks:
+The `docs:*` **task definitions live only here**, in `shared/mise/docs.toml`.
+A consumer repo holds no copies of them — its `.mise.toml` gains just a
+pointer (written by `docs-kit init`):
 
+```toml
+[vars]
+docs_kit = "/Users/you/Dev/me/docs-kit"          # where YOUR clone lives
+
+[env]
+DOCS_KIT = "{{ vars.docs_kit }}"
+
+[task_config]
+includes = ["{{ vars.docs_kit }}/shared/mise/docs.toml"]
 ```
-mise run docs:refresh   # mise run openapi + docs-kit refresh
-mise run docs:build     # refresh + zensical build --clean  -> site/
-mise run docs:check     # fail if generated docs are stale (CI / git hook)
-```
 
-Task bodies prefer a `docs-kit` binary found on `PATH`, else they run the one
-from the clone recorded as `$DOCS_KIT` (via `uv run --no-dev --project`), and
-the same pattern builds with `zensical` through `uvx`.
+`mise run docs:refresh|docs:build|docs:check` then behaves identically in
+every consumer repo, running in the consumer's root. `docs-kit init` itself is
+shared from this file too. Task bodies prefer a `docs-kit` binary on `PATH`,
+else run the clone's source through `uv run --no-dev --project "$DOCS_KIT"`
+(project installs re-validate sources by mtime, so a `git pull` in the clone
+is live on the very next `mise run` — bare `uvx --from <path>` would cache
+stale wheels and must not be used).
+
+Because the tasks come from the clone, **you cannot break them by editing a
+consumer repo** — and updating `shared/mise/docs.toml` updates all repos at
+once, no per-repo sync. A hand-deleted integration block is repaired with the
+same `docs-kit init`.
 
 ## Installation: clone the repo, point tasks at it, update by hand
 
@@ -55,36 +69,41 @@ No PyPI and no version pins — **your local clone is the installed version.**
 # 0. once per machine — clone where you like (this checkout is exactly that):
 git clone git@github.com:ldelarue/docs-kit.git ~/Dev/me/docs-kit
 
-# 1. per consumer repo (one command writes everything, incl. $DOCS_KIT):
+# 1. per consumer repo (one command writes everything, incl. the clone path):
 cd ~/Dev/my-new-api
 mise run openapi                                   # produce openapi.json first
 uv run --no-dev --project ~/Dev/me/docs-kit docs-kit init
 mise run docs:refresh && mise run docs:build
 
 # 2. upgrade the kit manually, whenever you decide — nothing auto-updates:
-cd ~/Dev/me/docs-kit && git pull                   # or: git checkout v0.1.1
+cd ~/Dev/me/docs-kit && git pull                   # or: git checkout v0.1.3
 cd ~/Dev/my-new-api && mise run docs:refresh && git diff docs/
 ```
 
-`docs-kit init` records its own checkout as `[env] DOCS_KIT = <abs path>`
-(override with `--docs-kit`; you may also hand-edit it to a `~/...` path — the
-tasks expand it). Because project installs re-validate Python sources by
-mtime, `git pull` is picked up on the very next `mise run docs:*` — the
-deliberate choice of `uv run --project` over `uvx --from <path>`, which would
-cache wheels and silently serve outdated kit code (~70 ms rebuild observed
-when changed).
+The clone path is the only machine-specific value in a consumer
+`.mise.toml`. Per-machine override — never committed — via
+`mise.local.toml` (add it to `.gitignore`):
 
-Optional speed/ergonomics: `uv tool install ~/Dev/me/docs-kit` puts `docs-kit`
-on `PATH`; the tasks' `command -v` branches start using it automatically (run
-`uv tool install` again after each pull, or skip it entirely).
+```toml
+[vars]
+docs_kit = "/other/machine/docs-kit"
+```
 
-**CI / git hooks:** the scaffolded GitHub workflow gets a commented block to
-check out the docs-kit repo (private-repo PAT) and set `DOCS_KIT` to that
-checkout, reusing the exact same fallback logic. A git hook just calls
-`mise run docs:check`.
+`docs-kit init` records its own checkout (`--docs-kit` overrides); the value
+must be **absolute** — mise's `includes` templates do not expand `~`.
 
-The full day-to-day update procedure, CI setup and optional future steps
-(kept as reference): [ROADMAP.md](ROADMAP.md).
+Optional: `uv tool install ~/Dev/me/docs-kit` puts `docs-kit` on `PATH`; the
+tasks' `command -v` branches start using it automatically (re-run it after
+each pull, or skip it entirely).
+
+**CI / git hooks:** runners have no personal clone, so the scaffolded
+workflow contains a commented recipe: check out `ldelarue/docs-kit` (private
+PAT) and write the path into `mise.local.toml` — otherwise the include is
+silently skipped and `mise run docs:*` fails with "no task found". A git hook
+just calls `mise run docs:check`.
+
+Full day-to-day procedures and optional future steps:
+[ROADMAP.md](ROADMAP.md).
 
 ## Development
 

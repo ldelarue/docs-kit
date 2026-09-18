@@ -87,8 +87,10 @@ semantics.** They are plain TOML resolved by a path and re-read on every
 (`docs-kit --version`), and the task layer must follow it. The mechanism
 below closes that gap.
 
-A single maintenance task — which must exist before the first download and
-therefore lives in the consuming repository's own config — pins a shallow,
+`docs-kit init --docs-kit .docs-kit` writes the task below into the
+consuming repository's `.mise.toml` (a helper task must exist before the
+first download, so it lives in the consuming config, not in the kit file);
+it is shown here for reference and for manual installs. It pins a shallow,
 sparse checkout (only `shared/`, ~200 KB) of the tag matching the installed
 CLI:
 
@@ -123,10 +125,9 @@ One-time setup of a consuming repository (method 1 style):
 cd ~/Dev/my-new-api
 mise run openapi                    # produce openapi.json first
 docs-kit --version                  # or uv tool run / uv run, per section 1
-# add the [vars]/[env]/[task_config] block and the docs:kit-sync task above,
-# plus ".docs-kit" in .gitignore (docs-kit init --docs-kit .docs-kit writes
-# everything except the sync task and that ignore entry)
-docs-kit init --docs-kit .docs-kit
+docs-kit init --docs-kit .docs-kit  # writes the [vars]/[env]/[task_config]
+                                    # block, the docs:kit-sync task, and the
+                                    # .docs-kit/ gitignore entry
 mise run docs:kit-sync && mise run docs:refresh && mise run docs:build
 ```
 
@@ -195,7 +196,7 @@ ROOT).
 
 | command | effect |
 | --- | --- |
-| `docs-kit init [--force] [--docs-kit PATH]` | Full install/repair, idempotent. Writes the authored scaffold (`docs/index.md`, `docs/tutorials\|guides\|explanation\|references/index.md`, `zensical.toml`, the CI workflow `.github/workflows/docs.yml`), the four generated files, the mise integration block (repairing a deleted one), and the `.gitignore` entries (`site/`, `.cache/`). Existing files that differ from what `init` would generate are listed and refused unless `--force`; generated files should be updated with `refresh`, not `--force`. `--docs-kit PATH` sets the value recorded as `vars.docs_kit` (required for method-1 installs: `--docs-kit .docs-kit`; a wheel run with no checkout records a placeholder and prints a warning). |
+| `docs-kit init [--force] [--docs-kit PATH]` | Full install/repair, idempotent. Writes the authored scaffold (`docs/index.md`, `docs/tutorials\|guides\|explanation\|references/index.md`, `zensical.toml`, the CI workflow `.github/workflows/docs.yml`), the four generated files, the mise integration block (repairing a deleted one), and the `.gitignore` entries (`site/`, `.cache/`). Existing files that differ from what `init` would generate are listed and refused unless `--force`; generated files should be updated with `refresh`, not `--force`. `--docs-kit PATH` sets the value recorded as `vars.docs_kit` (required for method-1 installs: `--docs-kit .docs-kit`, which additionally writes the `docs:kit-sync` task and the matching `.gitignore` entry; a wheel run with no checkout records a placeholder and prints a warning). |
 | `docs-kit refresh` | The routine command: regenerates the four generated files from the current `openapi.json`. Run it, then review `git diff docs/`, after a spec change, an endpoint change, or a kit upgrade. |
 | `docs-kit check` | Renders in memory and byte-compares; exits 1, names every missing or stale file, and prints `run \`mise run docs:refresh\` and commit the result`. This is the command invoked by CI and git hooks. |
 | `docs-kit --version` | The version the release-please release assigned; also the value `docs:kit-sync` reads. |

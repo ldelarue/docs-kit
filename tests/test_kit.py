@@ -106,6 +106,26 @@ def test_init_scaffolds_then_is_idempotent(tmp_path):
     assert (repo / ".mise.toml").read_bytes() == before
 
 
+def test_init_shim_mode_ships_kit_sync_task(tmp_path):
+    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
+    mise_path = repo / ".mise.toml"
+    mise = tomllib.loads(mise_path.read_text())  # valid TOML
+    assert mise["vars"]["docs_kit"] == ".docs-kit"
+    sync = mise["tasks"]["docs:kit-sync"]
+    assert 'git+ssh' not in sync["run"] and "docs-kit --version" in sync["run"]
+    assert ".docs-kit/" in (repo / ".gitignore").read_text()
+    assert mise_path.read_text().count("docs:kit-sync") == 1  # single table
+    before = mise_path.read_bytes()
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0  # keep, no duplicate
+    assert mise_path.read_bytes() == before
+    # clone method (absolute): must NOT get the sync task or shim ignore entry
+    repo2 = make_repo(tmp_path, "repo2", "golang.openapi.json")
+    assert cli.cmd_init(repo2, SPEC, False, str(tmp_path / "docs-kit-clone")) == 0
+    assert "docs:kit-sync" not in (repo2 / ".mise.toml").read_text()
+    assert ".docs-kit/" not in (repo2 / ".gitignore").read_text()
+
+
 def test_init_repairs_deleted_tasks_block(tmp_path):
     repo = make_repo(tmp_path, "repo", "golang.openapi.json")
     assert cli.cmd_init(repo, SPEC, False, "/tmp/kit-home") == 0

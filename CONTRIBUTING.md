@@ -148,21 +148,32 @@ workspace). The `check` job guards `mise run docs:check` on pull requests;
 each release - CI intentionally ignores the floating `latest` branch, and a
 runner never depends on what is installed on a machine.
 
-**This repository**: `ci.yml` runs pytest plus the lease-port/shellcheck
-suite on PRs and main and uploads the `docs-kit-dist` wheel artifact;
-`release.yml` is the manual release-please dispatch; `publish.yml` attaches
-wheels to each GitHub Release and force-moves `latest` to that tag.
+**This repository**: `ci.yml` first runs `hk check --all` (the same steps as
+the pre-commit hook - see Development), then pytest plus the
+lease-port/shellcheck suite on PRs and main, and uploads the `docs-kit-dist`
+wheel artifact; `release.yml` is the manual release-please dispatch;
+`publish.yml` attaches wheels to each GitHub Release and force-moves `latest`
+to that tag.
 
 ## Development
 
 ```bash
 cd ~/Dev/me/docs-kit
+mise install             # hk + ruff join python/uv/shellcheck from .mise.toml
+mise run hooks           # hk install --mise -> .git/hooks/pre-commit (per clone)
+mise run lint            # hk check --all: ruff format --diff, ruff check, shellcheck
+mise run fmt             # hk fix --all: apply ruff format + ruff --fix
 mise run test            # pytest (uv)
 mise run test-scripts    # shellcheck + lease-port scenarios (also checks shared/mise/kit-sync)
 mise run build           # dist/docs_kit-<ver>-py3-none-any.whl + .tar.gz
 mise run install-local   # build, then wheel -> docs-kit on PATH (uv tool, --force)
 uv run --no-project --with dist/docs_kit-*.whl docs-kit --version   # one-shot, no PATH change
 ```
+
+`hk.pkl` is the single source for both sides of that gate: the pre-commit hook
+fixes staged files (unstaged work stashed and restored), `hk check --all` is
+what CI re-runs, and `mise run lint` is the same command locally. Tools come
+from mise, not from the hook.
 
 The local wheel is accepted by every install method in the README (build
 locally, install locally, nothing pushed). Keep `shared/mise/kit-sync` and

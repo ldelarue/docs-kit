@@ -2,6 +2,8 @@
 python = "3.12"
 uv = "latest"
 shellcheck = "latest"
+hk = "latest"
+ruff = "latest"
 
 [tasks.test]
 description = "Run the test suite"
@@ -12,6 +14,21 @@ run = "uv run pytest"
 description = "Self-test shared/scripts: shellcheck + lease-port scenarios"
 dir = "{{cwd}}"
 run = "sh tests/test_lease_port.sh"
+
+[tasks.lint]
+description = "hk: check every file against hk.pkl (ruff fmt+check, shellcheck)"
+dir = "{{cwd}}"
+run = "hk check --all"
+
+[tasks.fmt]
+description = "hk: apply fixes (ruff format + ruff --fix) across the tree"
+dir = "{{cwd}}"
+run = "hk fix --all"
+
+[tasks.hooks]
+description = "hk: install the pre-commit hook into .git/hooks (mise-backed)"
+dir = "{{cwd}}"
+run = "hk install --mise"
 
 [tasks.build]
 description = "Build wheel + sdist into dist/"

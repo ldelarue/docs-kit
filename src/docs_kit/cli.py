@@ -36,7 +36,7 @@ MISE_GITIGNORE_ENTRIES = (".docs-kit/", "mise.local.toml")
 
 DEFAULT_SHIM = ".docs-kit"
 DOCS_SNIPPET = "{{ vars.docs_kit }}/shared/mise/docs.toml"
-MISE_BLOCK_MARK = re.compile(r"^\s*docs_kit\s*=", re.M)
+MISE_BLOCK_MARK = re.compile(r"^\s*docs_kit\s*=", re.MULTILINE)
 KIT_REPO_URL = "git@github.com:ldelarue/docs-kit.git"
 
 RED, YELLOW, CYAN = "31", "33", "36"
@@ -88,7 +88,10 @@ def _generated_outputs(root: Path, spec_name: str) -> list[tuple[Path, str]]:
         (root / VENDORED_SPEC, text),
         (root / SWAGGER_PAGE, render.render_swagger_page(title)),
         (root / API_PAGE, render.render_api_page()),
-        (root / ENDPOINTS_PAGE, generate_endpoints_page(spec, "reference/openapi.json", REGEN_CMD)),
+        (
+            root / ENDPOINTS_PAGE,
+            generate_endpoints_page(spec, "reference/openapi.json", REGEN_CMD),
+        ),
     ]
 
 
@@ -129,10 +132,19 @@ def _scaffold_files(root: Path, spec_name: str) -> list[tuple[Path, str]]:
     description = info.get("description") or ""
     return [
         (root / "docs" / "index.md", render.render_index_page(title, description)),
-        (root / "docs" / "tutorials" / "index.md", render.render_section_stub("Tutorials")),
+        (
+            root / "docs" / "tutorials" / "index.md",
+            render.render_section_stub("Tutorials"),
+        ),
         (root / "docs" / "guides" / "index.md", render.render_section_stub("Guides")),
-        (root / "docs" / "explanation" / "index.md", render.render_section_stub("Explanation")),
-        (root / "docs" / "references" / "index.md", render.render_section_stub("References")),
+        (
+            root / "docs" / "explanation" / "index.md",
+            render.render_section_stub("Explanation"),
+        ),
+        (
+            root / "docs" / "references" / "index.md",
+            render.render_section_stub("References"),
+        ),
         (root / ZENSONFIG, render.render_zensical_toml(title, description)),
         (root / WORKFLOW, render.render_workflow_yml()),
     ]
@@ -156,9 +168,13 @@ def pull_tasks(root: Path, shim: str = DEFAULT_SHIM, version: str = __version__)
     engine = shim_dir / "shared" / "mise" / "kit-sync"
     env = {**os.environ, "GIT_SSH_COMMAND": "ssh -o BatchMode=yes"}
     if engine.is_file():
-        rc = subprocess.run(["sh", str(engine), shim, ver], cwd=root, env=env).returncode
+        rc = subprocess.run(
+            ["sh", str(engine), shim, ver], cwd=root, env=env, check=False
+        ).returncode
         if rc != 0:
-            raise RuntimeError(f"kit-sync exited with {rc} (no payload at {tag}? layer left untouched)")
+            raise RuntimeError(
+                f"kit-sync exited with {rc} (no payload at {tag}? layer left untouched)"
+            )
         return tag
 
     def git(*args: str) -> str:
@@ -166,13 +182,15 @@ def pull_tasks(root: Path, shim: str = DEFAULT_SHIM, version: str = __version__)
             ["git", *args],
             cwd=root,
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
+            check=False,
         )
         if proc.returncode != 0:
             err = proc.stderr.strip()
-            raise RuntimeError(f"`git {' '.join(args)}` failed: {err.splitlines()[-1] if err else 'no output'}")
+            raise RuntimeError(
+                f"`git {' '.join(args)}` failed: {err.splitlines()[-1] if err else 'no output'}"
+            )
         return proc.stdout
 
     bootstrap = not (shim_dir / ".git").exists()
@@ -180,8 +198,26 @@ def pull_tasks(root: Path, shim: str = DEFAULT_SHIM, version: str = __version__)
         shim_dir.mkdir(parents=True, exist_ok=True)
         git("init", "-q", shim)
         git("-C", shim, "remote", "add", "origin", url)
-    git("-C", shim, "fetch", "-q", "--depth", "1", "origin", f"+refs/tags/{tag}:refs/tags/{tag}")
-    if not git("-C", shim, "ls-tree", "-r", "--name-only", f"refs/tags/{tag}^{{}}", "--", "shared/mise").strip():
+    git(
+        "-C",
+        shim,
+        "fetch",
+        "-q",
+        "--depth",
+        "1",
+        "origin",
+        f"+refs/tags/{tag}:refs/tags/{tag}",
+    )
+    if not git(
+        "-C",
+        shim,
+        "ls-tree",
+        "-r",
+        "--name-only",
+        f"refs/tags/{tag}^{{}}",
+        "--",
+        "shared/mise",
+    ).strip():
         raise RuntimeError(
             f"tag {tag} ships no task layer (shared/mise first shipped in v0.2.0); "
             "the current layer was left untouched - upgrade the CLI past 0.1.x"
@@ -191,7 +227,16 @@ def pull_tasks(root: Path, shim: str = DEFAULT_SHIM, version: str = __version__)
         # even byte-identical ones; the checkout supplies canonical copies
         shutil.rmtree(shim_dir / "shared", ignore_errors=True)
     git("-C", shim, "-c", "advice.detachedHead=false", "checkout", "-q", tag)
-    git("-C", shim, "-c", "advice.detachedHead=false", "sparse-checkout", "set", "--no-cone", "/shared/mise/")
+    git(
+        "-C",
+        shim,
+        "-c",
+        "advice.detachedHead=false",
+        "sparse-checkout",
+        "set",
+        "--no-cone",
+        "/shared/mise/",
+    )
     return tag
 
 
@@ -253,7 +298,7 @@ def cmd_serve(root: Path, port: int | None, host: str) -> int:
         sys.exit("ERROR: neither zensical nor uvx is on PATH; install uv or zensical")
     print(f"serving docs on http://{dev_addr} (Ctrl-C to stop)")
     try:
-        return subprocess.run(server, cwd=root).returncode
+        return subprocess.run(server, cwd=root, check=False).returncode
     except FileNotFoundError as exc:
         sys.exit(f"ERROR: cannot start the docs server: {exc}")
 
@@ -278,7 +323,11 @@ def _report_legacy_mise_lines(root: Path) -> None:
     path = root / ".mise.toml"
     if not path.is_file():
         return
-    hits = [ln for ln in path.read_text(encoding="utf-8").splitlines() if _LEGACY_MISE_RE.search(ln)]
+    hits = [
+        ln
+        for ln in path.read_text(encoding="utf-8").splitlines()
+        if _LEGACY_MISE_RE.search(ln)
+    ]
     if not hits:
         return
     print(
@@ -330,7 +379,9 @@ def _print_mise_next_steps(root: Path, block: str) -> None:
                 YELLOW,
             )
         )
-    print(_c("then verify and commit: mise run docs:refresh && mise run docs:build", CYAN))
+    print(
+        _c("then verify and commit: mise run docs:refresh && mise run docs:build", CYAN)
+    )
 
 
 def _mise_step(root: Path, kit_home: str) -> None:
@@ -364,7 +415,9 @@ def _integrate_gitignore(root: Path, use_mise: bool) -> None:
     print(f"  .gitignore: added {', '.join(added)}")
 
 
-def cmd_init(root: Path, spec_name: str, force: bool, kit_home: str, use_mise: bool = True) -> int:
+def cmd_init(
+    root: Path, spec_name: str, force: bool, kit_home: str, use_mise: bool = True
+) -> int:
     """Install or repair the docs integration (idempotent).
 
     - missing files                             -> written
@@ -395,9 +448,13 @@ def cmd_init(root: Path, spec_name: str, force: bool, kit_home: str, use_mise: b
         else:
             conflicts.append(str(path.relative_to(root)))
     if conflicts or gen_conflicts:
-        parts = ["ERROR: existing files differ from what docs-kit would generate (not touched):"]
+        parts = [
+            "ERROR: existing files differ from what docs-kit would generate (not touched):"
+        ]
         for rel in gen_conflicts:
-            parts.append(f"  generated: {rel}   -> fix with `mise run docs:refresh` instead")
+            parts.append(
+                f"  generated: {rel}   -> fix with `mise run docs:refresh` instead"
+            )
         for rel in conflicts:
             parts.append(f"  hand-written: {rel}")
         parts.append("Review them, or re-run with --force to overwrite.")
@@ -426,18 +483,27 @@ def cmd_init(root: Path, spec_name: str, force: bool, kit_home: str, use_mise: b
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="docs-kit", description=__doc__)
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     def common(p: argparse.ArgumentParser) -> None:
-        p.add_argument("root", nargs="?", default=".", help="target repo (default: cwd)")
-        p.add_argument("--spec", default="openapi.json", help="spec file relative to root")
+        p.add_argument(
+            "root", nargs="?", default=".", help="target repo (default: cwd)"
+        )
+        p.add_argument(
+            "--spec", default="openapi.json", help="spec file relative to root"
+        )
 
     p_init = sub.add_parser("init", help="scaffold a Zensical docs site in a repo")
     common(p_init)
     p_init.add_argument("--force", action="store_true", help="overwrite scaffold files")
-    p_init.add_argument("--without-mise", action="store_true",
-                        help="skip all mise integration (no task-layer pull, no opt-in block to paste)")
+    p_init.add_argument(
+        "--without-mise",
+        action="store_true",
+        help="skip all mise integration (no task-layer pull, no opt-in block to paste)",
+    )
     p_init.add_argument(
         "--docs-kit",
         default=_default_kit_home(),
@@ -447,10 +513,16 @@ def main(argv: list[str] | None = None) -> int:
     common(p_refresh)
     p_check = sub.add_parser("check", help="fail if generated docs files are stale")
     common(p_check)
-    p_pull = sub.add_parser("pull-tasks", help="pin the .docs-kit task layer to this CLI's version")
-    p_pull.add_argument("root", nargs="?", default=".", help="target repo (default: cwd)")
+    p_pull = sub.add_parser(
+        "pull-tasks", help="pin the .docs-kit task layer to this CLI's version"
+    )
+    p_pull.add_argument(
+        "root", nargs="?", default=".", help="target repo (default: cwd)"
+    )
     p_serve = sub.add_parser("serve", help="serve the docs with live reload (Zensical)")
-    p_serve.add_argument("root", nargs="?", default=".", help="target repo (default: cwd)")
+    p_serve.add_argument(
+        "root", nargs="?", default=".", help="target repo (default: cwd)"
+    )
     p_serve.add_argument(
         "--port",
         type=int,
@@ -458,12 +530,16 @@ def main(argv: list[str] | None = None) -> int:
         help="exact port to bind (default: $DOCS_PORT, else prefer 8010, then first free "
         "port in $FREE_PORT_MIN-$FREE_PORT_MAX)",
     )
-    p_serve.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
+    p_serve.add_argument(
+        "--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)"
+    )
 
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()
     if args.command == "init":
-        return cmd_init(root, args.spec, args.force, args.docs_kit, use_mise=not args.without_mise)
+        return cmd_init(
+            root, args.spec, args.force, args.docs_kit, use_mise=not args.without_mise
+        )
     if args.command == "serve":
         return cmd_serve(root, args.port, args.host)
     if args.command == "refresh":

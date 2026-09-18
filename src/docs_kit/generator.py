@@ -25,7 +25,10 @@ def md_table(headers: list[str], rows: list[list[str]]) -> str:
     def esc(c: str) -> str:
         return c.replace("|", "\\|")
 
-    out = ["| " + " | ".join(esc(h) for h in headers) + " |", "|" + "|".join([":-:"] * len(headers)) + "|"]
+    out = [
+        "| " + " | ".join(esc(h) for h in headers) + " |",
+        "|" + "|".join([":-:"] * len(headers)) + "|",
+    ]
     for row in rows:
         out.append("| " + " | ".join(esc(c) if c else "-" for c in row) + " |")
     return "\n".join(out)
@@ -58,8 +61,10 @@ def deref(spec: dict, schema: dict) -> dict:
     seen = set()
     while "$ref" in schema and schema["$ref"] not in seen:
         seen.add(schema["$ref"])
-        schema = spec.get("components", {}).get("schemas", {}).get(
-            schema["$ref"].rsplit("/", 1)[-1], {}
+        schema = (
+            spec.get("components", {})
+            .get("schemas", {})
+            .get(schema["$ref"].rsplit("/", 1)[-1], {})
         )
     return schema
 
@@ -140,8 +145,17 @@ def generate_endpoints_page(
                             (p.get("description") or "").strip() or "-",
                         ]
                     )
-                parts.append("**Parameters**\n\n" + md_table(["Name", "In", "Required", "Type", "Description"], rows) + "\n")
-            body_ref = op.get("requestBody", {}).get("content", {}).get("application/json", {}).get("schema", {})
+                parts.append(
+                    "**Parameters**\n\n"
+                    + md_table(["Name", "In", "Required", "Type", "Description"], rows)
+                    + "\n"
+                )
+            body_ref = (
+                op.get("requestBody", {})
+                .get("content", {})
+                .get("application/json", {})
+                .get("schema", {})
+            )
             if body_ref:
                 resolved = deref(spec, body_ref)
                 table = schema_table(spec, resolved)
@@ -152,10 +166,26 @@ def generate_endpoints_page(
                 resp_schema = ""
                 for ct in resp.get("content", {}).values():
                     s = ct.get("schema", {})
-                    resp_schema = s.get("$ref", "").rsplit("/", 1)[-1] or openapi_type(s)
-                    resp_schema = backtick(resp_schema) if not resp_schema.startswith("`") else resp_schema
-                rows.append([backtick(status), (resp.get("description") or "").strip(), resp_schema or "-"])
-            parts.append("**Responses**\n\n" + md_table(["Status", "Description", "Schema"], rows) + "\n")
+                    resp_schema = s.get("$ref", "").rsplit("/", 1)[-1] or openapi_type(
+                        s
+                    )
+                    resp_schema = (
+                        backtick(resp_schema)
+                        if not resp_schema.startswith("`")
+                        else resp_schema
+                    )
+                rows.append(
+                    [
+                        backtick(status),
+                        (resp.get("description") or "").strip(),
+                        resp_schema or "-",
+                    ]
+                )
+            parts.append(
+                "**Responses**\n\n"
+                + md_table(["Status", "Description", "Schema"], rows)
+                + "\n"
+            )
     if comp:
         parts.append("## Schemas\n")
         for cname in sorted(comp):

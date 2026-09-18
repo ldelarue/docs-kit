@@ -1,6 +1,6 @@
 # docs-kit
 
-Scaffold, regenerate, and CI-verify a **Zensical + Diátaxis** docs site for an API repository from its `openapi.json`, with a `docs:*` mise task layer version-locked to the CLI.
+docs-kit scaffolds, regenerates, and CI-verifies a **Zensical + Diátaxis** docs site for an API repository, generated from its own `openapi.json`, with a `docs:*` mise task layer version-locked to the CLI. The point is to keep API docs honest without hand-maintenance: the kit derives the reference pages straight from the spec, owns only the generated files so your authored guides are never overwritten, and the `docs:check` gate fails the build when docs go stale, so the published docs can't drift from the API they describe.
 
 ## Install (private repo: needs an SSH key, or `gh auth setup-git`)
 

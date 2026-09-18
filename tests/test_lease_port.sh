@@ -42,9 +42,11 @@ time.sleep(60)
 }
 
 in_range() {
-	[ "$(printf '%s' "$1" | tr -dc '0-9')" = "$1" ] &&
-		[ "$1" -ge 8000 ] && [ "$1" -le 8999 ] ||
-		fail "'$1' is not a port in 8000-8999 ($2)"
+	if [ "$(printf '%s' "$1" | tr -dc '0-9')" = "$1" ] &&
+		[ "$1" -ge 8000 ] && [ "$1" -le 8999 ]; then
+		return 0
+	fi
+	fail "'$1' is not a port in 8000-8999 ($2)"
 }
 
 command -v shellcheck >/dev/null 2>&1 || fail "shellcheck missing (run: mise install)"

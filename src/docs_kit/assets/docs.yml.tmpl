@@ -11,6 +11,18 @@ permissions:
   contents: read
 
 jobs:
+  # If .mise.toml installs docs-kit from the private ldelarue/docs-kit repo,
+  # the runner needs read access (docs-kit ROADMAP.md, Phase 2 step 4). Create
+  # a fine-grained `DOCS_KIT_PAT` (contents: read) repo secret and add to both
+  # jobs, before mise-action (the checkout keeps the uv-run fallback usable):
+  #   - uses: actions/checkout@v7
+  #     with:
+  #       repository: ldelarue/docs-kit
+  #       path: .docs-kit
+  #       token: ${{ secrets.DOCS_KIT_PAT }}
+  #   plus at job level:  env: { DOCS_KIT: ${{ github.workspace }}/.docs-kit }
+  # A pure-mise CI install instead: configure git with the PAT (insteadOf
+  # rewrite to https), then mise install resolves the git-pinned tools.
   check:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest

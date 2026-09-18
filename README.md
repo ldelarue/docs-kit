@@ -44,48 +44,54 @@ mise run docs:build     # refresh + zensical build --clean  -> site/
 mise run docs:check     # fail if generated docs are stale (CI / git hook)
 ```
 
-Bootstrap a new repo:
+## Installation: private Git, pinned by tag (no PyPI)
+
+docs-kit is **not** a PyPI package and does not need to be. The supported
+model is: **mise installs docs-kit from its private git repo, pinned to a
+tag** (mise's PyPI backend accepts git sources — see
+[ROADMAP.md](ROADMAP.md), Phase 2). Updates are a manual one-line edit, never
+`pipx upgrade`-style rolling.
+
+For a new user, the full loop (assuming the repo exists at
+`github.com/ldelarue/docs-kit`; run the git auth once with `gh auth setup-git`
+or use the `git@github.com:…` SSH form):
 
 ```bash
-cd my-api-repo && mise run openapi                     # produce openapi.json
+# 1. declare the tool + scaffold a consumer repo in ONE step
+cd ~/Dev/my-new-api
+mise use 'pypi:git+https://github.com/ldelarue/docs-kit.git@v0.1.1' \
+         'pypi:zensical@0.0.62'            # mise writes the [tools] keys; keep them
+docs-kit init                              # scaffold docs/ + zensical.toml + tasks
+mise run openapi                           # if openapi.json not produced yet: init once more with --force
+
+# 2. daily usage
+mise run docs:refresh && mise run docs:build
+
+# 3. upgrade the kit (manual by design): edit the @vX.Y.Z tag in .mise.toml
+mise install && mise run docs:refresh && git diff docs/
+```
+
+The exact `mise use` key syntax (tag spelling, value shape) should be
+validated once in a scratch directory — paste what mise generates rather
+than hand-writing it (ROADMAP Phase 2). While the repo has **no remote**, a
+local-path bootstrap stands in:
+
+```bash
+cd my-api-repo && mise run openapi
 uv run --no-dev --project /Users/ladelaru/Dev/me/docs-kit docs-kit init
 mise run docs:refresh && mise run docs:build
 ```
 
-## Installation model (mise tool, pinned by git tag)
-
-Target state: the consuming `.mise.toml` declares `docs-kit` and `zensical`
-as mise PyPI-backend tools installed from a pinned git ref, so the binaries sit
-on `mise`'s PATH and task calls are plain and instant:
-
-```toml
-[tools]
-"pypi:ldelarue/docs-kit" = "0.1.0"    # exact key confirmed via `mise use`
-"pypi:zensical" = "0.0.62"
-```
-
-docs-kit has **no git remote yet**, and the mise pypi backend supports neither
-local paths nor `git+file` URLs, so until this repo is pushed the generated
-`.mise.toml` block instead:
-
-- records `[env] DOCS_KIT = <local path>` (overridable: `--docs-kit`),
-- writes task bodies that prefer the installed binaries and fall back to
-  `uv run --no-dev --project "$DOCS_KIT" docs-kit` /
-  `uvx --from "zensical==0.0.62" zensical`. The fallback deliberately uses
-  `uv run --project`, not `uvx --from <path>`: uv caches wheels built from
-  local paths per-content and silently serves stale kit code after edits,
-  while a project install re-validates by source mtime (observed ~70 ms
-  rebuild-when-changed, ~200-500 ms call overhead).
-- keeps the final `pypi:` pins as comments.
-
-To finish the migration once remote + tag exist:
-
-```bash
-cd my-api-repo
-mise use 'pypi:ldelarue/docs-kit@0.1.0'   # paste the key mise generates
-mise use 'pypi:zensical@0.0.62'
-# uncomment the pins in the docs block; optionally simplify the task bodies
-```
+`init` records `[env] DOCS_KIT = <local path>` (overridable: `--docs-kit`) and
+writes task bodies that prefer installed binaries and fall back to
+`uv run --no-dev --project "$DOCS_KIT" docs-kit` /
+`uvx --from "zensical==0.0.62" zensical`. The fallback deliberately uses
+`uv run --project`, not `uvx --from <path>`: uv caches wheels built from local
+paths and silently serves stale kit code after edits, while a project install
+re-validated by source mtime (observed ~70 ms rebuild-when-changed). Local
+paths are not a supported mise source — that is precisely what installing
+from a git tag fixes; see [ROADMAP.md](ROADMAP.md) for the migration and the
+day-to-day update procedure (Phase 3).
 
 ## Development
 

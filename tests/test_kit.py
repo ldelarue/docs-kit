@@ -106,26 +106,36 @@ def test_init_scaffolds_then_is_idempotent(tmp_path):
     assert (repo / ".mise.toml").read_bytes() == before
 
 
-def test_init_shim_mode_ships_kit_sync_task(tmp_path):
+def test_init_shim_mode_moves_integration_to_local_file(tmp_path):
     repo = make_repo(tmp_path, "repo", "golang.openapi.json")
     assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
-    mise_path = repo / ".mise.toml"
-    mise = tomllib.loads(mise_path.read_text())  # valid TOML
-    assert mise["vars"]["docs_kit"] == ".docs-kit"
-    sync = mise["tasks"]["docs:kit-sync"]
-    assert sync["run"].lstrip().startswith("set -eu")
-    assert "exec sh .docs-kit/shared/scripts/kit-sync" in sync["run"]  # engine fast-path
-    assert "docs-kit --version" in sync["run"]  # inline fallback for old layers
-    assert ".docs-kit/" in (repo / ".gitignore").read_text()
-    assert mise_path.read_text().count("docs:kit-sync") == 1  # single table
-    before = mise_path.read_bytes()
-    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0  # keep, no duplicate
-    assert mise_path.read_bytes() == before
-    # clone method (absolute): must NOT get the sync task or shim ignore entry
-    repo2 = make_repo(tmp_path, "repo2", "golang.openapi.json")
-    assert cli.cmd_init(repo2, SPEC, False, str(tmp_path / "docs-kit-clone")) == 0
-    assert "docs:kit-sync" not in (repo2 / ".mise.toml").read_text()
-    assert ".docs-kit/" not in (repo2 / ".gitignore").read_text()
+    tracked = (repo / ".mise.toml").read_text()
+    local = (repo / "mise.local.toml").read_text()
+    assert "docs:pull-tasks" not in tracked
+    assert cli.DOCS_SNIPPET not in tracked
+    cfg = tomllib.loads(local)
+    assert cfg["vars"]["docs_kit"] == ".docs-kit"
+    assert cfg["task_config"]["includes"] == [cli.DOCS_SNIPPET]
+    pull = cfg["tasks"]["docs:pull-tasks"]
+    assert "sparse-checkout set --no-cone '/shared/mise/'" in pull["run"]
+    assert "exec sh .docs-kit/shared/mise/kit-sync" in pull["run"]  # engine fast-path
+    ign = (repo / ".gitignore").read_text()
+    assert ".docs-kit/" in ign and "mise.local.toml" in ign
+    before = (repo / ".mise.toml").read_bytes(), (repo / "mise.local.toml").read_bytes()
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0  # idempotent
+    assert before == ((repo / ".mise.toml").read_bytes(), (repo / "mise.local.toml").read_bytes())
+    # migrating away from an old tracked shim integration: lines are removed
+    old_mise = repo / ".mise.toml"
+    old_mise.write_text(
+        '[vars]\ndocs_kit = ".docs-kit"\n\n[env]\nDOCS_KIT = "{{ vars.docs_kit }}"\n\n'
+        '[task_config]\nincludes = ["{{ vars.docs_kit }}/shared/mise/docs.toml"]\n\n'
+        '[tasks."docs:kit-sync"]\ndescription = "x"\nrun = "y"\n\n[tasks.dev]\nrun = "go run ."\n'
+    )
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
+    migrated = old_mise.read_text()
+    assert "docs:kit-sync" not in migrated and cli.DOCS_SNIPPET not in migrated
+    assert "docs_kit" not in migrated and "[tasks.dev]" in migrated
+    assert "docs:pull-tasks" in (repo / "mise.local.toml").read_text()
 
 
 def test_init_repairs_deleted_tasks_block(tmp_path):

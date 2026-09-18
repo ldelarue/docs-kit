@@ -67,103 +67,103 @@ uv tool install --from ./docs_kit-X.Y.Z-py3-none-any.whl docs-kit   # or: uv add
 
 ## 2. Shared mise tasks, version-locked to the installed CLI
 
-The `docs:*` tasks live in `shared/mise/docs.toml` and are attached to a
-consuming repository by path:
+The `docs:*` tasks live in the kit as `shared/mise/docs.toml`. In shim mode
+a consuming repository receives **no tracked docs-kit lines in
+`.mise.toml`**: `docs-kit init --docs-kit .docs-kit` writes the entire
+integration — `[vars]`, `[env]`, `[task_config].includes` and the fetch
+task — into `mise.local.toml` (a native mise per-machine file that init
+also adds to `.gitignore`, alongside `.docs-kit/`). Put personal mise
+overrides in the same file, above the generated block.
 
-```toml
-[vars]
-docs_kit = ".docs-kit"                        # relative = repository-local shim
-
-[env]
-DOCS_KIT = "{{ vars.docs_kit }}"
-
-[task_config]
-includes = ["{{ vars.docs_kit }}/shared/mise/docs.toml"]
-```
+The layer is fetched into `.docs-kit/` as a shallow, sparse checkout that
+contains **only `/shared/mise/`** — the task file and the sync engine,
+nothing else of the repository.
 
 A limitation must be stated precisely: **mise tasks carry no version
 semantics.** They are plain TOML resolved by a path and re-read on every
 `mise run`. The Python package, however, knows its version
-(`docs-kit --version`), and the task layer must follow it. The mechanism
-below closes that gap.
-
-`docs-kit init --docs-kit .docs-kit` writes the task below into the
-consuming repository's `.mise.toml` (a helper task must exist before the
-first download, so it lives in the consuming config, not in the kit file);
-it is shown here for reference and for manual installs. It pins a shallow,
-sparse checkout (only `shared/`, ~200 KB) of the tag matching the installed
-CLI:
+(`docs-kit --version`), and the task layer must follow it. The generated
+`mise.local.toml` closes that gap; its fetch task is:
 
 ```toml
-[tasks."docs:kit-sync"]
-description = "Pin the .docs-kit docs task layer to the installed docs-kit version"
+[tasks."docs:pull-tasks"]
+description = "Fetch docs-kit task files (shared/mise) at the installed CLI's tag"
 run = '''
 set -eu
-if [ -f .docs-kit/shared/scripts/kit-sync ]; then
-  exec sh .docs-kit/shared/scripts/kit-sync .docs-kit
+if [ -f .docs-kit/shared/mise/kit-sync ]; then
+  exec sh .docs-kit/shared/mise/kit-sync .docs-kit
 fi
 ver="$({ docs-kit --version 2>/dev/null || uv run --no-dev docs-kit --version; } 2>/dev/null | awk '{print $2}')"
 if [ -z "$ver" ]; then
-  echo "kit-sync: no docs-kit on PATH or uv project here; install the CLI first (kit README section 1)" >&2
+  echo "pull-tasks: no docs-kit on PATH or uv project here; install the CLI first (kit README section 1)" >&2
   exit 1
 fi
 v="v$ver"
 if [ ! -d .docs-kit ]; then
   git clone -q -c advice.detachedHead=false --depth 1 --branch "$v" \
     --filter=blob:none --sparse git@github.com:ldelarue/docs-kit.git .docs-kit
-  git -C .docs-kit sparse-checkout set shared
 fi
 if [ "$(git -C .docs-kit describe --tags --exact-match 2>/dev/null || true)" != "$v" ]; then
   git -C .docs-kit fetch -q --depth 1 origin "+refs/tags/$v:refs/tags/$v"
   git -C .docs-kit -c advice.detachedHead=false checkout -q "$v"
 fi
+git -C .docs-kit -c advice.detachedHead=false sparse-checkout set --no-cone '/shared/mise/' 2>/dev/null || true
 echo "docs task layer pinned at $v (frozen fallback; kit-sync engine file arrives with a later release)"
 '''
 ```
 
-Task definition and logic are separated deliberately: the canonical sync
-engine lives **in the kit** (`shared/scripts/kit-sync`) and is therefore
-maintained in one place, updated together with every pinned layer; the
-snippet above (consumer config, unavoidable for bootstrap since it must run
-before the layer exists) delegates to that engine as soon as it is present.
-The remaining inline body is a frozen fallback for layers published before
-the engine existed (v0.2.1 and older) and disappears from behaviour—not from
-the file—once the pin moves to a newer release.
+Task definition and logic are separated deliberately: the canonical engine
+lives **in the pulled payload itself** (`shared/mise/kit-sync`) and is
+therefore maintained in one place and upgraded by pulling the layer; the
+snippet above (which must run before the payload exists, hence it is
+generated into the consumer's local config) delegates to that engine as soon
+as it is present. The remaining inline body is a frozen fallback for layers
+published before the engine existed (v0.2.1 and older) and disappears from
+behaviour—not from the file—once the pin moves to a newer release.
 
-The task reads the version of the installed CLI and checks `.docs-kit` out
-at exactly that tag (`latest` or a pinned `@vX.Y.Z` — either way `$ver` is a
-released number) using the same SSH authentication as everything else.
-`.docs-kit` is a build artifact: never edit it, and add it to `.gitignore`.
+Pinned fetch semantics: the task reads the version of the installed CLI
+(`latest` or `@vX.Y.Z` — `$ver` is always a released number) and checks
+`.docs-kit` out at exactly that tag, same SSH authentication as everything
+else; it also renormalises the sparse sparsity to `/shared/mise/` on every
+run. `.docs-kit` is a throwaway artifact: never edit it (git checkout will
+not overwrite hand edits there, and one `rm -rf` restores it).
 
-One-time setup of a consuming repository (method 1 style):
+One-time setup of a consuming repository:
 
 ```bash
 cd ~/Dev/my-new-api
 mise run openapi                    # produce openapi.json first
 docs-kit --version                  # or uv tool run / uv run, per section 1
-docs-kit init --docs-kit .docs-kit  # writes the [vars]/[env]/[task_config]
-                                    # block, the docs:kit-sync task, and the
-                                    # .docs-kit/ gitignore entry
-mise run docs:kit-sync && mise run docs:refresh && mise run docs:build
+docs-kit init --docs-kit .docs-kit  # writes mise.local.toml + gitignore
+                                    # entries; .mise.toml stays docs-kit-free
+mise run docs:pull-tasks && mise run docs:refresh && mise run docs:build
 ```
+
+Re-running `init` in shim mode also removes any previously generated
+docs-kit lines from `.mise.toml` (vars/env/include, older sync tasks) — they
+live in `mise.local.toml` now.
 
 Upgrades require exactly one decision — bump the CLI ref:
 
 ```bash
 uv tool install --from "docs-kit @ git+ssh://…git@latest" docs-kit   # re-resolve latest
 # (or change an @vX.Y.Z pin / lock upgrade, per section 1)
-mise run docs:kit-sync && mise run docs:refresh && git diff docs/
+mise run docs:pull-tasks && mise run docs:refresh && git diff docs/
 ```
 
 The task layer cannot drift from the CLI: both come from the same release,
 and the task file is checked out byte-exactly from `v$(docs-kit --version)`.
 Constraints: `.docs-kit` requires **v0.2.0 or newer** (first tag carrying
-`shared/mise/docs.toml`), and the set of available tasks depends on the
-pinned layer (e.g. `docs:serve` arrives with the release after v0.2.1).
-CI is independent of this mechanism in both directions: the consumer
-workflow checks out the kit by its own explicit `ref:` tag (see CI), so a
-runner never depends on what is installed on a given machine, and moving
-the `latest` ref affects no CI result by itself.
+`shared/mise/docs.toml`); the set of available tasks follows the pinned
+layer (e.g. `docs:serve` arrives with the first release after v0.2.1).
+Because the pull is limited to `shared/mise/`, tasks that reach into
+`shared/scripts/` — the lease-port helper of `docs:serve` — fall back to
+their fixed default (port 8010 on shims; full port leasing requires the
+clone method). CI is independent of this mechanism in both directions: the
+consumer workflow checks out the kit by its own explicit `ref:` tag and
+writes its own `mise.local.toml`, so a runner never depends on what is
+installed on a machine, and moving the `latest` ref affects no CI result by
+itself.
 
 ## 3. Use the whole project locally (full clone)
 
@@ -212,10 +212,10 @@ ROOT).
 
 | command | effect |
 | --- | --- |
-| `docs-kit init [--force] [--docs-kit PATH]` | Full install/repair, idempotent. Writes the authored scaffold (`docs/index.md`, `docs/tutorials\|guides\|explanation\|references/index.md`, `zensical.toml`, the CI workflow `.github/workflows/docs.yml`), the four generated files, the mise integration block (repairing a deleted one), and the `.gitignore` entries (`site/`, `.cache/`). Existing files that differ from what `init` would generate are listed and refused unless `--force`; generated files should be updated with `refresh`, not `--force`. `--docs-kit PATH` sets the value recorded as `vars.docs_kit` (required for method-1 installs: `--docs-kit .docs-kit`, which additionally writes the `docs:kit-sync` task and the matching `.gitignore` entry; a wheel run with no checkout records a placeholder and prints a warning). |
+| `docs-kit init [--force] [--docs-kit PATH]` | Full install/repair, idempotent. Writes the authored scaffold (`docs/index.md`, `docs/tutorials\|guides\|explanation\|references/index.md`, `zensical.toml`, the CI workflow `.github/workflows/docs.yml`), the four generated files, the mise integration block (repairing a deleted one), and the `.gitignore` entries (`site/`, `.cache/`). Existing files that differ from what `init` would generate are listed and refused unless `--force`; generated files should be updated with `refresh`, not `--force`. `--docs-kit PATH` sets the value recorded as `vars.docs_kit` (required for method-1 installs: `--docs-kit .docs-kit`, in shim mode init writes `mise.local.toml` (vars/env/include + the `docs:pull-tasks` fetch task) and the matching `.gitignore` entries, and strips previously generated shim lines from `.mise.toml`; a wheel run with no checkout records a placeholder and prints a warning). |
 | `docs-kit refresh` | The routine command: regenerates the four generated files from the current `openapi.json`. Run it, then review `git diff docs/`, after a spec change, an endpoint change, or a kit upgrade. |
 | `docs-kit check` | Renders in memory and byte-compares; exits 1, names every missing or stale file, and prints `run \`mise run docs:refresh\` and commit the result`. This is the command invoked by CI and git hooks. |
-| `docs-kit --version` | The version the release-please release assigned; also the value `docs:kit-sync` reads. |
+| `docs-kit --version` | The version the release-please release assigned; also the value `docs:pull-tasks` reads. |
 
 Generated files owned by the kit (hand edits are overwritten on the next
 `refresh`):
@@ -251,7 +251,8 @@ checkout through `uv run --no-dev --project`:
 | `docs:init` | `docs-kit init` (see above) |
 | `docs:refresh` | `mise run openapi`, then `docs-kit refresh` |
 | `docs:build` | refresh, then `zensical build --clean` → `site/` |
-| `docs:serve` | live-reload serve on `127.0.0.1:$PORT` — prefers **8010**, otherwise the first free port in 8000–8999 (via `shared/scripts/lease-port`); pinned exactly with `DOCS_PORT=…`. The port machinery is local-only; CI never serves. |
+| `docs:serve` | live-reload serve on `127.0.0.1:$PORT` — prefers **8010**, otherwise the first free port in 8000–8999 (via `shared/scripts/lease-port`, fixed **8010** on uv-shims where only `shared/mise/` was pulled); pinned exactly with `DOCS_PORT=…`. The port machinery is local-only; CI never serves. |
+| `docs:pull-tasks` | uv-shim consumers only, defined in `mise.local.toml` rather than in the payload: fetches `.docs-kit/shared/mise/` at the installed CLI's tag (section 2) |
 | `docs:check` | `mise run openapi`, `docs-kit check`, and `git diff --exit-code -- docs openapi.json` (fails when a refresh was not committed) |
 
 ## CI
@@ -259,7 +260,9 @@ checkout through `uv run --no-dev --project`:
 **Consumer repositories** receive the scaffolded
 `.github/workflows/docs.yml` from `init`: both jobs check the kit out
 tag-pinned (`ref: vX.Y.Z`, with a read-only private `DOCS_KIT_PAT` secret —
-one time per repository) and write the path into `mise.local.toml`. The
+one time per repository) and write `mise.local.toml` in full
+(`[vars]`, `[env]` and the `[task_config]` include — the same shape `init`
+generates for shims). The
 `check` job guards `docs:check` on pull requests; the `deploy` job builds
 `site/` to GitHub Pages on `main`. Bump the `ref:` in both jobs at each kit
 release — that pin, not the CLI, is CI's version lock; CI intentionally
@@ -281,5 +284,5 @@ the `latest` branch to that release.
 3. Merge → tag `vX.Y.Z` + GitHub Release + wheel assets; `publish.yml` moves
    the `latest` branch to the tag. Consumers using `@latest` refresh via
    `uv tool upgrade` / `uv lock --upgrade-package docs-kit` and
-   `mise run docs:kit-sync`; consumers with an explicit pin re-pin and bump
+   `mise run docs:pull-tasks`; consumers with an explicit pin re-pin and bump
    the CI `ref:` value.

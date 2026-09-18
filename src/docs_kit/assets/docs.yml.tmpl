@@ -33,7 +33,7 @@ jobs:
           path: .docs-kit
           token: ${{ secrets.DOCS_KIT_PAT }}
           ref: v0.2.1
-      - run: printf '[vars]\ndocs_kit = "%s/.docs-kit"\n' "$GITHUB_WORKSPACE" > mise.local.toml
+      - run: printf '[vars]\ndocs_kit = "%s/.docs-kit"\n[env]\nDOCS_KIT = "{{ vars.docs_kit }}"\n[task_config]\nincludes = ["{{ vars.docs_kit }}/shared/mise/docs.toml"]\n' "$GITHUB_WORKSPACE" > mise.local.toml
 
       - uses: jdx/mise-action@v3
       - uses: actions/cache@v4
@@ -64,7 +64,7 @@ jobs:
           path: .docs-kit
           token: ${{ secrets.DOCS_KIT_PAT }}
           ref: v0.2.1
-      - run: printf '[vars]\ndocs_kit = "%s/.docs-kit"\n' "$GITHUB_WORKSPACE" > mise.local.toml
+      - run: printf '[vars]\ndocs_kit = "%s/.docs-kit"\n[env]\nDOCS_KIT = "{{ vars.docs_kit }}"\n[task_config]\nincludes = ["{{ vars.docs_kit }}/shared/mise/docs.toml"]\n' "$GITHUB_WORKSPACE" > mise.local.toml
 
       - uses: jdx/mise-action@v3
       - uses: actions/cache@v4

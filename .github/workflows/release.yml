@@ -1,0 +1,25 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # Never runs on its own: trigger manually (Actions -> Release -> Run
+      # workflow). It then opens/updates a release PR bumping
+      # pyproject.toml + __version__ together, and merging that PR tags
+      # vX.Y.Z and creates the GitHub Release.
+      # Note: GITHUB_TOKEN cannot trigger CI on the PRs it opens. If branch
+      # protection requires the CI check on release PRs, create a PAT with
+      # contents+pull-requests write, store it as RELEASE_PLEASE_TOKEN, and
+      # pass it via with.token below.
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: .release-please-config.json
+          manifest-file: .release-please-manifest.json

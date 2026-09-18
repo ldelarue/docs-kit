@@ -48,7 +48,7 @@ Bootstrap a new repo:
 
 ```bash
 cd my-api-repo && mise run openapi                     # produce openapi.json
-uvx --from /Users/ladelaru/Dev/me/docs-kit docs-kit init
+uv run --no-dev --project /Users/ladelaru/Dev/me/docs-kit docs-kit init
 mise run docs:refresh && mise run docs:build
 ```
 
@@ -70,7 +70,12 @@ local paths nor `git+file` URLs, so until this repo is pushed the generated
 
 - records `[env] DOCS_KIT = <local path>` (overridable: `--docs-kit`),
 - writes task bodies that prefer the installed binaries and fall back to
-  `uvx --from "$DOCS_KIT" docs-kit` / `uvx --from "zensical==0.0.62" zensical`,
+  `uv run --no-dev --project "$DOCS_KIT" docs-kit` /
+  `uvx --from "zensical==0.0.62" zensical`. The fallback deliberately uses
+  `uv run --project`, not `uvx --from <path>`: uv caches wheels built from
+  local paths per-content and silently serves stale kit code after edits,
+  while a project install re-validates by source mtime (observed ~70 ms
+  rebuild-when-changed, ~200-500 ms call overhead).
 - keeps the final `pypi:` pins as comments.
 
 To finish the migration once remote + tag exist:

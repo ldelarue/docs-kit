@@ -22,7 +22,7 @@ from pathlib import Path
 from . import __version__, render
 from .generator import generate_endpoints_page
 
-REGEN_CMD = "mise run docs:refresh"
+REGEN_CMD = "docs-kit refresh"
 
 VENDORED_SPEC = "docs/reference/openapi.json"
 SWAGGER_PAGE = "docs/reference/swagger.html"
@@ -41,7 +41,7 @@ DOCS_SNIPPET = "{{ vars.docs_kit }}/shared/mise/docs.toml"
 MISE_BLOCK_MARK = re.compile(r"^\s*docs_kit\s*=", re.MULTILINE)
 KIT_REPO_URL = "git@github.com:ldelarue/docs-kit.git"
 
-RED, YELLOW, CYAN = "31", "33", "36"
+RED, YELLOW, CYAN, BOLD, DIM = "31", "33", "36", "1", "2"
 
 
 def _c(text: str, code: str) -> str:
@@ -49,6 +49,10 @@ def _c(text: str, code: str) -> str:
     if sys.stdout.isatty() and not os.environ.get("NO_COLOR"):
         return f"\033[{code}m{text}\033[0m"
     return text
+
+
+def _section(title: str) -> None:
+    print(_c(f"\n{title}", BOLD))
 
 
 def _default_kit_home() -> str:
@@ -72,7 +76,7 @@ def _read_spec(root: Path, spec_name: str) -> tuple[str, dict]:
     if not path.is_file():
         sys.exit(
             f"ERROR: {spec_name} not found in {root}. "
-            "Generate it first (e.g. `mise run openapi`)."
+            "Export your API spec there first, or point at it with --spec."
         )
     text = path.read_text(encoding="utf-8")
     try:
@@ -106,7 +110,7 @@ def _write(path: Path, content: str) -> None:
 def cmd_refresh(root: Path, spec_name: str) -> int:
     for path, content in _generated_outputs(root, spec_name):
         _write(path, content)
-        print(f"  wrote {path.relative_to(root)}")
+        print(f"  {_c('+', CYAN)} {path.relative_to(root)}")
     return 0
 
 
@@ -286,7 +290,7 @@ def _lease_port(preferred: int, host: str) -> int:
 
 def cmd_serve(root: Path, port: int | None, host: str) -> int:
     """Live-reload serve: pinned port (--port/$DOCS_PORT), else leased (prefers 8010)."""
-    pinned = port if port is not None else None
+    pinned = port
     if pinned is None and (env := os.environ.get("DOCS_PORT")):
         if not env.isdigit():
             sys.exit(f"ERROR: DOCS_PORT must be an integer (got: {env})")
@@ -402,25 +406,20 @@ def _print_mise_next_steps(root: Path, block: str) -> None:
     current = _mise_opt_in(root)
     shown = None
     if not MISE_BLOCK_MARK.search(current):
-        shown = (
-            _c(
-                "next step - copy-paste this block into mise.local.toml (init can\n"
-                "  only append it when your config has none of the [vars]/[env]/[task_config]\n"
-                "  tables yet); or merge its three keys into the tables you already have:",
-                CYAN,
-            ),
+        shown = _c(
+            "  next step - copy-paste this block into mise.local.toml (init can\n"
+            "  only append it when your config has none of the [vars]/[env]/[task_config]\n"
+            "  tables yet); or merge its three keys into the tables you already have:",
+            CYAN,
         )
     elif block.strip() not in current:
-        shown = (
-            _c(
-                "note - the docs-kit keys in your mise config are OUTDATED or hand-edited;\n"
-                "  replace them with:",
-                YELLOW,
-            ),
+        shown = _c(
+            "  note - the docs-kit keys in your mise config are OUTDATED or hand-edited;\n"
+            "  replace them with:",
+            YELLOW,
         )
     if shown:
-        for line in shown:
-            print(line)
+        print(shown)
         print(block.rstrip("\n"))
         print(
             _c(
@@ -429,9 +428,6 @@ def _print_mise_next_steps(root: Path, block: str) -> None:
                 YELLOW,
             )
         )
-    print(
-        _c("then verify and commit: mise run docs:refresh && mise run docs:build", CYAN)
-    )
 
 
 def _mise_step(root: Path, kit_home: str) -> None:
@@ -462,18 +458,28 @@ def _integrate_gitignore(root: Path, use_mise: bool) -> None:
     entries = GITIGNORE_ENTRIES + (MISE_GITIGNORE_ENTRIES if use_mise else ())
     added = [e for e in entries if e not in lines]
     if not added:
-        print("  .gitignore: already covers", ", ".join(entries))
+        print(_c(f"  .gitignore already covers {', '.join(entries)}", DIM))
         return
     text = text.rstrip("\n")
     if text:
         text += "\n"
     text += "\n".join(added) + "\n"
     _write(path, text)
-    print(f"  .gitignore: added {', '.join(added)}")
+    print(f"  {_c('+', CYAN)} .gitignore {', '.join(added)}")
+
+
+def _report_group(title: str, written: list[str], unchanged: list[str]) -> None:
+    """One init section: the files just written, then a count of the current ones."""
+    _section(title)
+    for rel in written:
+        print(f"  {_c('+', CYAN)} {rel}")
+    if unchanged:
+        noun = "file" if len(unchanged) == 1 else "files"
+        print(_c(f"  {len(unchanged)} {noun} already current", DIM))
 
 
 def cmd_init(
-    root: Path, spec_name: str, force: bool, kit_home: str, use_mise: bool = True
+    root: Path, spec_name: str, force: bool, kit_home: str, use_mise: bool = False
 ) -> int:
     """Install or repair the docs integration (idempotent).
 
@@ -485,60 +491,69 @@ def cmd_init(
     - mise.local.toml / .mise.toml present      -> NEVER written or modified;
       the block is printed for manual copy-paste/merge, and legacy generated
       lines in .mise.toml are reported for manual removal
-    - mise mode (default) additionally prints the opt-in mise.local.toml
+    - mise mode (--with-mise) additionally prints the opt-in mise.local.toml
       block when it could not be auto-created and, for shim installs, pins
       shared/mise into <kit-home>/
       (DOCS_KIT_SKIP_PULL=1 skips the sync; checkout installs never pull)
     """
-    scaffold = [(p, c, "scaffold") for p, c in _scaffold_files(root, spec_name)]
-    generated = [(p, c, "generated") for p, c in _generated_outputs(root, spec_name)]
+    groups = {
+        "Scaffold": _scaffold_files(root, spec_name),
+        "Generated": _generated_outputs(root, spec_name),
+    }
     plan: list[tuple[Path, str]] = []
+    written: dict[str, list[str]] = {}
+    unchanged: dict[str, list[str]] = {}
     conflicts: list[str] = []
     gen_conflicts: list[str] = []
-    unchanged: list[str] = []
-    for path, content, kind in scaffold + generated:
-        if not path.exists():
-            plan.append((path, content))
-            continue
-        if path.read_text(encoding="utf-8") == content:
-            unchanged.append(str(path.relative_to(root)))
-        elif force:
-            plan.append((path, content))
-        elif kind == "generated":
-            gen_conflicts.append(str(path.relative_to(root)))
-        else:
-            conflicts.append(str(path.relative_to(root)))
+    for title, files in groups.items():
+        written[title], unchanged[title] = [], []
+        for path, content in files:
+            rel = str(path.relative_to(root))
+            if not path.exists() or (
+                force and path.read_text(encoding="utf-8") != content
+            ):
+                plan.append((path, content))
+                written[title].append(rel)
+            elif path.read_text(encoding="utf-8") == content:
+                unchanged[title].append(rel)
+            elif title == "Generated":
+                gen_conflicts.append(rel)
+            else:
+                conflicts.append(rel)
     if conflicts or gen_conflicts:
         parts = [
             "ERROR: existing files differ from what docs-kit would generate (not touched):"
         ]
         for rel in gen_conflicts:
-            parts.append(
-                f"  generated: {rel}   -> fix with `mise run docs:refresh` instead"
-            )
+            parts.append(f"  generated: {rel}   -> fix with `{REGEN_CMD}` instead")
         for rel in conflicts:
             parts.append(f"  hand-written: {rel}")
         parts.append("Review them, or re-run with --force to overwrite.")
         sys.exit("\n".join(parts))
+
+    print(_c(f"docs-kit {__version__} · init", BOLD))
+    print(_c(f"  repo {root}   spec {spec_name}", DIM))
     for path, content in plan:
         _write(path, content)
-        print(f"  wrote {path.relative_to(root)}")
-    for rel in unchanged:
-        print(f"  unchanged {rel}")
-    if not plan:
-        print("  scaffold already complete (nothing to write)")
+    for title in groups:
+        _report_group(title, written[title], unchanged[title])
+
+    _section("mise")
     if use_mise:
         _mise_step(root, kit_home)
     else:
-        print(
-            _c(
-                "  mise integration skipped (--without-mise); re-run docs-kit init\n"
-                "  without the flag to add the docs:* task layer",
-                CYAN,
-            )
-        )
+        print(_c("  skipped - pass --with-mise to wire the docs:* tasks", DIM))
+
+    _section("Git")
     _integrate_gitignore(root, use_mise)
-    print("done.")
+
+    _section("Next steps")
+    if use_mise:
+        print("  mise run docs:refresh   regenerate the reference pages")
+        print("  mise run docs:build     build the site, then commit")
+    else:
+        print(f"  {REGEN_CMD}    regenerate the reference pages")
+        print("  docs-kit serve      preview with live reload")
     return 0
 
 
@@ -561,9 +576,9 @@ def main(argv: list[str] | None = None) -> int:
     common(p_init)
     p_init.add_argument("--force", action="store_true", help="overwrite scaffold files")
     p_init.add_argument(
-        "--without-mise",
+        "--with-mise",
         action="store_true",
-        help="skip all mise integration (no task-layer pull, no opt-in block to paste)",
+        help="add mise integration (pulls the .docs-kit task layer, wires the docs:* tasks)",
     )
     p_init.add_argument(
         "--docs-kit",
@@ -599,7 +614,7 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(args.root).resolve()
     if args.command == "init":
         return cmd_init(
-            root, args.spec, args.force, args.docs_kit, use_mise=not args.without_mise
+            root, args.spec, args.force, args.docs_kit, use_mise=args.with_mise
         )
     if args.command == "serve":
         return cmd_serve(root, args.port, args.host)

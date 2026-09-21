@@ -11,9 +11,9 @@ uv tool install --from "docs-kit @ git+ssh://git@github.com/ldelarue/docs-kit.gi
 ## Quick Start
 
 ```bash
-docs-kit init                    # scaffold docs
-docs-kit build                   # generate & build the site
-docs-kit serve                   # view at http://127.0.0.1:8010
+docs-kit init      # scaffold docs
+docs-kit refresh   # regenerate the reference pages from openapi.json
+docs-kit serve     # preview at http://127.0.0.1:8010
 ```
 
 **Optional**: Wire to mise with `docs-kit init --with-mise`
@@ -23,10 +23,12 @@ CI setup: add `DOCS_KIT_PAT` secret (contents: read on ldelarue/docs-kit) and se
 ## CLI
 
 ```text
-docs-kit init [ROOT] [--spec openapi.json] [--with-mise] [--force]
-docs-kit build [ROOT] [--spec openapi.json]
+docs-kit init [ROOT] [--spec openapi.json] [--with-mise] [--force] [--docs-kit PATH]
+docs-kit refresh [ROOT] [--spec openapi.json]
 docs-kit check [ROOT] [--spec openapi.json]
-docs-kit serve [ROOT] [--port N]
+docs-kit serve [ROOT] [--port N] [--host H]
+docs-kit pull-tasks [ROOT]
+docs-kit --version
 ```
 
 **With mise**: After `docs-kit init --with-mise`, use `mise run docs:*` tasks:
@@ -42,7 +44,7 @@ mise run docs:pull-tasks   re-pin .docs-kit/ (shared/mise) to the installed CLI'
 ## Update
 
 ```bash
-uv tool upgrade docs-kit && mise run docs:refresh
+uv tool upgrade docs-kit && docs-kit refresh
 ```
 
 ## Dev Mode

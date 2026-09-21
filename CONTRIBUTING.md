@@ -141,18 +141,11 @@ the `kit-sync` engine only exist from the release that ships the current
 bumping the CLI, run `mise run docs:pull-tasks` (or `docs-kit pull-tasks`
 when even the block is missing) or the tasks stay a version behind.
 
-> Baseline reset (current state): history is one `feat:` commit at `0.0.0`, the
-> manifest says `0.0.0`, and every pre-reset tag and GitHub Release is deleted,
-> so the next Release dispatch cuts `v0.1.0` - the number the old manifest had
-> already burned on an untagged `0.1.0`. Until that first tag exists, `latest`
-> mirrors `main` by hand (the `latest` move runs only on a real release), and a CLI
-> whose `__version__` matches no tag gets the best-effort shim warning instead
-> of a task layer.
-
 `shared/mise` vs `shared/scripts`: the sparse pull contains only
-`shared/mise/`, so task bodies reaching into `shared/scripts/`
-(`docs:serve`'s `lease-port`) fall back to their fixed default (port 8010);
-full port leasing needs a checkout install. `.docs-kit/` is a throwaway
+`shared/mise/`. Port leasing for `docs:serve` lives in the CLI itself
+(`docs-kit serve`), so shim and checkout installs behave identically;
+`shared/scripts/lease-port` is the standalone shell equivalent, kept for
+direct use and covered by its own self-test. `.docs-kit/` is a throwaway
 artifact: never edit it, `rm -rf` restores it.
 
 ## CI

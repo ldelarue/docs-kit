@@ -34,10 +34,6 @@ def md_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(out)
 
 
-def code_block(lines: list[str]) -> str:
-    return "```console\n" + "\n".join(lines) + "\n```"
-
-
 def openapi_type(schema: dict) -> str:
     if "$ref" in schema:
         return backtick(schema["$ref"].rsplit("/", 1)[-1])
@@ -45,8 +41,6 @@ def openapi_type(schema: dict) -> str:
         return " | ".join(openapi_type(s) for s in schema["anyOf"])
     if "allOf" in schema:
         return " & ".join(openapi_type(s) for s in schema["allOf"])
-    if "array" in schema:
-        return f"Array of {openapi_type(schema['array'])}"
     if "enum" in schema:
         enum = ", ".join(backtick(str(e)) for e in schema["enum"])
         return f"{schema.get('type', 'string')} ({enum})"
@@ -133,12 +127,13 @@ def generate_endpoints_page(
             params = ops.get("parameters", []) + op.get("parameters", [])
             if params:
                 rows = []
-                for p in sorted(params, key=lambda p: p["name"]):
+                params = [deref(spec, p) for p in params]
+                for p in sorted(params, key=lambda p: p.get("name", "")):
                     p = dict(p)
                     p["schema"] = deref(spec, p.get("schema", {}))
                     rows.append(
                         [
-                            backtick(p["name"]),
+                            backtick(p.get("name", "-")),
                             p.get("in", "-"),
                             "yes" if p.get("required") else "no",
                             openapi_type(p.get("schema", {})),
@@ -163,17 +158,14 @@ def generate_endpoints_page(
                     parts.append("**Request body**\n\n" + table + "\n")
             rows = []
             for status, resp in sorted(op.get("responses", {}).items()):
-                resp_schema = ""
-                for ct in resp.get("content", {}).values():
-                    s = ct.get("schema", {})
-                    resp_schema = s.get("$ref", "").rsplit("/", 1)[-1] or openapi_type(
-                        s
-                    )
-                    resp_schema = (
-                        backtick(resp_schema)
-                        if not resp_schema.startswith("`")
-                        else resp_schema
-                    )
+                content = resp.get("content", {})
+                # one deterministic schema per status: JSON wins, else the first by name
+                ct = (
+                    "application/json"
+                    if "application/json" in content
+                    else next(iter(sorted(content)), "")
+                )
+                resp_schema = openapi_type(content[ct].get("schema", {})) if ct else ""
                 rows.append(
                     [
                         backtick(status),

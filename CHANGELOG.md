@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/ldelarue/docs-kit/compare/v0.2.0...v0.3.0) (2026-09-21)
+
+
+### Features
+
+* update tags ([#7](https://github.com/ldelarue/docs-kit/issues/7)) ([ad56dd3](https://github.com/ldelarue/docs-kit/commit/ad56dd3572af7c6be3dea152f1f337c13f0d58e5))
+
 ## [0.2.0](https://github.com/ldelarue/docs-kit/compare/v0.1.0...v0.2.0) (2026-09-21)
 
 

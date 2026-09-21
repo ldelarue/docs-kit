@@ -1,10 +1,10 @@
 # Shared mise tasks + shared/scripts/, single-sourced from the docs-kit clone.
 # Opt-in wiring (nothing is ever written into your .mise.toml): `docs-kit init`
-# generates the small block below into .docs-kit/mise.local.toml, and you
-# append it to the repo's own git-ignored mise.local.toml (mise auto-loads
-# that file):
-#   touch mise.local.toml && grep -qF docs-kit mise.local.toml || cat .docs-kit/mise.local.toml >> mise.local.toml
-# It sets [vars].docs_kit / [env].DOCS_KIT and includes this file via
+# creates a missing repo-local mise.local.toml (git-ignored, mise auto-loads
+# it) with the keys below; an existing one is never rewritten - init appends
+# the keys only when the merged file still parses as valid TOML, and otherwise
+# prints the block for a manual paste/merge. It sets [vars].docs_kit /
+# [env].DOCS_KIT and includes this file via
 # {{ vars.docs_kit }} - pointing at the pulled .docs-kit layer or a full clone.
 # NOTE: uv-shim consumers only pull /shared/mise/ (sparse), which is fine:
 # everything beyond the task bodies (port leasing, the zensical run) lives

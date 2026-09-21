@@ -14,10 +14,15 @@ uv add "docs-kit @ git+ssh://git@github.com/ldelarue/docs-kit.git@latest"       
 
 ```bash
 mise run openapi                       # your repo's own spec-export task: produce openapi.json first
-docs-kit init                          # scaffolds docs; .mise.toml is NOT touched; prints the paste block below
+docs-kit init                          # scaffolds docs; creates the keys below in mise.local.toml
+                                       # when it has none, else prints this block to paste
 # (add --without-mise to scaffold docs only: no .docs-kit/ layer, no task wiring)
-# copy-paste this into mise.local.toml (mise auto-loads it); if you already have these
-# tables, merge the keys - one of each header only, a duplicate is invalid TOML:
+```
+
+```toml
+# the docs-kit keys (init writes them into a missing mise.local.toml; if you
+# already have these tables somewhere, merge the keys - one of each header
+# only, a duplicate is invalid TOML):
 [vars]
 docs_kit = ".docs-kit"
 
@@ -26,20 +31,34 @@ DOCS_KIT = "{{ vars.docs_kit }}"
 
 [task_config]
 includes = ["{{ vars.docs_kit }}/shared/mise/docs.toml"]
+```
+
+```bash
 mise run docs:refresh && mise run docs:build   # then commit; docs:* tasks are live
 ```
 
-`docs-kit init` prints exactly that block (the values are the ones it recorded); re-running init
-detects the pasted keys and only re-prints the block when its content went stale (older kit
-version or hand edits). `.docs-kit/` holds only the pinned `shared/mise/` task layer that init
-pulls (tag `v$(docs-kit --version)`); the pull is best-effort - until a matching tag exists it
-leaves `.docs-kit/` empty with a warning, so run init from a dev checkout (`--docs-kit`) meanwhile.
+`init` also generates `.github/workflows/docs.yml` (kit-owned: refresh rewrites it,
+check fails on drift). Its two jobs check docs-kit out tag-pinned at the version that
+generated the workflow, and recreate the gitignored `mise.local.toml` keys CI never
+has. One-time CI setup per consumer repo: a fine-grained `DOCS_KIT_PAT` secret
+(contents: read on ldelarue/docs-kit) plus Pages source = "GitHub Actions".
+
+`docs-kit init` writes that block into a missing `mise.local.toml` (mise auto-loads it; init
+git-ignores it), or appends it to an existing one when the merged file stays valid TOML.
+If your `mise.local.toml` already carries tables or docs-kit keys init will not merge into,
+it is never rewritten - init just re-prints the block for a manual paste/merge, and does so
+again when pasted keys went stale (older kit version or hand edits). `.docs-kit/` holds only
+the pinned `shared/mise/` task layer that init pulls (tag `v$(docs-kit --version)`); the pull
+is best-effort - until a matching tag exists it leaves `.docs-kit/` empty with a warning and
+writes no `mise.local.toml` (a broken include would not load), so run init from a dev
+checkout (`--docs-kit`) meanwhile.
 
 ## Tasks (`mise run docs:*`)
 
 ```text
-docs:init         docs-kit init (re-run to re-print the current block and re-pin the layer)
-docs:refresh      mise run openapi, then docs-kit refresh (regenerate the 4 owned files)
+docs:init         docs-kit init (re-run to re-apply the keys to mise.local.toml and re-pin the layer)
+docs:refresh      mise run openapi, then docs-kit refresh (regenerate the 5 owned files,
+                  docs pages + the CI workflow - refresh also re-stamps the workflow's kit `ref`)
 docs:build        refresh, then zensical build --clean -> site/
 docs:serve        live-reload on http://127.0.0.1:8010, or the next free 8000-8999 port if taken
                   (pin exactly with DOCS_PORT=...)
@@ -50,10 +69,11 @@ docs:pull-tasks   re-pin .docs-kit/ (shared/mise) to the installed CLI's version
 ## Update
 
 ```bash
-uv tool upgrade docs-kit && mise run docs:pull-tasks && mise run docs:check
+uv tool upgrade docs-kit && mise run docs:pull-tasks && mise run docs:refresh && mise run docs:check
+# refresh is what moves the workflow's tag-pinned kit ref to the new version
 ```
 
-## Dev checkout (dogfood templates/tasks; `git pull` is then the upgrade)
+## Dev checkout
 
 ```bash
 git clone git@github.com:ldelarue/docs-kit.git ~/Dev/me/docs-kit        # once per machine

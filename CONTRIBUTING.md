@@ -11,22 +11,29 @@ Everything the [README](README.md) deliberately leaves out: design guarantees, t
 - **Idempotent and byte-stable**: `refresh` rewrites the whole generated set;
   ordering is sort-stable, runs are byte-equal when nothing changed, and
   semantically-equal specs render identical pages.
-- **Generated and authored content never mix**: the kit owns exactly four
-  files (`docs/reference/openapi.json` the vendored spec, `docs/references/api.md`,
-  `docs/references/endpoints.md`, `docs/reference/swagger.html`); everything
-  else under `docs/`, `zensical.toml` and the workflow are scaffold - written
-  by `init`, then owned by the consuming repository (`--force` rewrites).
+- **Generated and authored content never mix**: the kit owns exactly five
+  files - the four docs files (`docs/reference/openapi.json` the vendored
+  spec, `docs/references/api.md`, `docs/references/endpoints.md`,
+  `docs/reference/swagger.html`) plus the consumer CI workflow
+  (`.github/workflows/docs.yml`, whose tag-pinned `ref` is stamped with the
+  generating CLI's version); everything else under `docs/` and
+  `zensical.toml` are scaffold - written by `init`, then owned by the
+  consuming repository (`--force` rewrites).
 - **`init` installs _and_ repairs**, idempotently: missing pieces are
   re-added, byte-identical files are skipped, hand-edited files are refused
   unless `--force` (generated files should be fixed with `refresh`).
-- **`init` never writes your mise config.** `.mise.toml` and the root
-  `mise.local.toml` are left byte-for-byte untouched: init prints the
-  comment-free opt-in block for manual copy-paste (into `mise.local.toml`
-  or any config file the user picks); pasting it is the user's explicit
-  choice. Legacy
+- **`init` adds to `mise.local.toml`, never to your `.mise.toml`.** A missing
+  `mise.local.toml` is created with the comment-free opt-in block; an existing
+  one gains the block only through a *safe append* - no docs-kit keys present
+  and the merged text re-parses as valid TOML (a `[vars]`/`[env]`/
+  `[task_config]` header clash would make it invalid, so risky merges are
+  refused). Anything else - stale or hand-edited docs-kit keys, unparseable
+  merges - leaves the file byte-for-byte untouched and only gets the printed
+  copy-paste/merge hint; pasting is then the user's explicit choice.
+  `.mise.toml` is **never written**; legacy
   lines from old inits inside `.mise.toml` are quoted in a red cleanup note,
   never rewritten. `--without-mise` skips all of it (no task-layer pull, no
-  block to paste; docs scaffold only, existing files left alone).
+  keys anywhere; docs scaffold only, existing files left alone).
 
 ## Pinning model
 
@@ -62,18 +69,22 @@ are explicit (`--docs-kit /path/to/docs-kit` or the env).
 - **Shim install (`.docs-kit`, relative path)**: init syncs `<repo>/.docs-kit/`
   to tag `v$(docs-kit --version)` as a shallow sparse checkout containing
   **only `/shared/mise/`** (the task file, the sync engine, nothing else),
-  then prints the paste block. The sync is best-effort: failure is an amber
-  warning, init still exits 0, and `docs-kit pull-tasks` (or
+  then puts the opt-in keys into `mise.local.toml` (created, or appended when
+  the merge stays safe; otherwise printed for a manual paste). The sync is
+  best-effort: failure is an amber warning, init still exits 0, nothing is
+  written that would point mise at a missing include, `mise.local.toml` is
+  left for a manual paste of the printed block, and `docs-kit pull-tasks` (or
   `mise run docs:pull-tasks` once any layer exists) retries.
-  `DOCS_KIT_SKIP_PULL=1` skips it (used by tests).
+  `DOCS_KIT_SKIP_PULL=1` skips the sync too (used by tests).
 - **Checkout install (absolute path, explicit `--docs-kit`)**: nothing is
   fetched - the tasks resolve straight from the full clone (which also
   carries `shared/scripts/`); `git pull` in the clone is the deliberate,
   reviewable upgrade.
 
 `.docs-kit/` stores the pulled layer **only** - no block template lives
-there; the block exists just once, in the comment-free printout the user
-copy-pastes into their mise config:
+there; the block exists just once, as the comment-free string in the CLI,
+which init writes into `mise.local.toml` (created/appended when safe) or
+prints verbatim when only a manual paste can do:
 
 ```toml
 [vars]
@@ -86,22 +97,22 @@ DOCS_KIT = "{{ vars.docs_kit }}"
 includes = ["{{ vars.docs_kit }}/shared/mise/docs.toml"]
 ```
 
-Copy-pasted into `mise.local.toml` (or any config file) - mise auto-loads
-it, so there is no other wiring; mise 2026.9.3 has no top-level config-merge to
+`mise.local.toml` is git-ignored and mise auto-loads it, so init creating it
+is the whole wiring (users who prefer another config file move the keys
+there). mise 2026.9.3 has no top-level config-merge to
 abuse (`include = [...]` is rejected as an unknown field), which is exactly
-why `[task_config].includes` is the mechanism. The init message deliberately
-names no config file: it only shows the block and says "copy-paste into a mise
-config file".
+why `[task_config].includes` is the mechanism.
 
 Re-running init scans the repo's mise config files for a `docs_kit =` key:
-none found -> it prints the copy-paste block again; found but the printed
-block text is absent (stale after a kit upgrade, or hand-edited) -> the block
-is re-printed with a replace hint. The files themselves are still never
-edited. If your
+none found -> a missing `mise.local.toml` is created (when the task layer is
+in place), an existing config-key-free one is appended to **iff** the merged
+text re-parses as TOML, and anything riskier only re-prints the block; keys
+found but the block text absent (stale after a kit upgrade, or hand-edited)
+-> the block is re-printed with a replace hint, never edited in place. If your
 `mise.local.toml` already defines its own `[vars]`/`[env]`/`[task_config]`
-tables, **merge** the three keys into them instead of keeping both copies -
-duplicate table headers are invalid TOML and mise then skips the whole file
-(verified on mise 2026.9.3).
+tables, init refuses the append and asks you to **merge** the three keys into
+them instead of keeping both copies - duplicate table headers are invalid
+TOML and mise then skips the whole file (verified on mise 2026.9.3).
 
 **Version semantics**: mise tasks carry none - they are plain TOML resolved
 by path and re-read on every `mise run`. The Python package knows its
@@ -145,14 +156,19 @@ artifact: never edit it, `rm -rf` restores it.
 
 ## CI
 
-**Consumer repositories** get `.github/workflows/docs.yml` from `init`: both
-jobs check the kit out tag-pinned (`ref: vX.Y.Z`, one-time read-only
-`DOCS_KIT_PAT` secret) and write their own `mise.local.toml` with the same
-block shape (the `[vars].docs_kit` path on a runner is absolute under the
-workspace). The `check` job guards `mise run docs:check` on pull requests;
-`deploy` builds `site/` to GitHub Pages on main. Bump `ref:` in both jobs at
-each release - CI intentionally ignores the floating `latest` branch, and a
-runner never depends on what is installed on a machine.
+**Consumer repositories** get `.github/workflows/docs.yml` as a GENERATED
+kit-owned file: `refresh` rewrites it and `check` fails on any drift, so the
+workflow can never silently age. Both jobs check the kit out tag-pinned with
+a one-time read-only `DOCS_KIT_PAT` secret and recreate the three gitignored
+`mise.local.toml` opt-in keys before mise-action runs (`docs_kit` is the
+absolute checkout path under the workspace; committing the same keys to
+`.mise.toml` is a harmless duplicate). The `ref: v` stamp is the version of
+the CLI that rendered the file - `docs:refresh` after a kit upgrade moves
+both jobs together, and a ref that names no published tag fails loudly at
+checkout (never hand-bump it). The `check` job guards `mise run docs:check`
+on pull requests; `deploy` builds `site/` to GitHub Pages on main. CI
+intentionally ignores the floating `latest` branch, and a runner never
+depends on what is installed on a machine.
 
 **This repository**: `ci.yml` first runs `hk check --all` (the same steps as
 the pre-commit hook - see Development), then pytest plus the

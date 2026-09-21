@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from importlib.resources import files
 
+from . import __version__
+
 _ASSETS = files("docs_kit") / "assets"
 
 
@@ -44,4 +46,5 @@ def render_section_stub(title: str) -> str:
 
 
 def render_workflow_yml() -> str:
-    return _asset("docs.yml.tmpl")
+    # .replace, not .format: GitHub Actions '${{ }}' expressions are braces.
+    return _asset("docs.yml.tmpl").replace("__KIT_VERSION__", __version__)

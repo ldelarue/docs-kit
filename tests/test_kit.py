@@ -41,7 +41,13 @@ def strip_spec_prose(text: str) -> str:
 
 
 def generated_rels():
-    return (cli.VENDORED_SPEC, cli.SWAGGER_PAGE, cli.API_PAGE, cli.ENDPOINTS_PAGE)
+    return (
+        cli.VENDORED_SPEC,
+        cli.SWAGGER_PAGE,
+        cli.API_PAGE,
+        cli.ENDPOINTS_PAGE,
+        cli.WORKFLOW,
+    )
 
 
 def test_both_specs_render_identical_pages(tmp_path):
@@ -87,6 +93,24 @@ def test_check_drifts_when_spec_changes(tmp_path):
     assert cli.cmd_check(repo, SPEC) == 1
 
 
+def test_workflow_pin_is_stamped_and_checked(tmp_path):
+    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
+    assert cli.cmd_refresh(repo, SPEC) == 0
+    wf = repo / cli.WORKFLOW
+    text = wf.read_text()
+    assert f"ref: v{cli.__version__}" in text
+    assert text.count(f"ref: v{cli.__version__}") == 2  # BOTH jobs, one render
+    assert "__KIT_VERSION__" not in text
+    assert '"{{ vars.docs_kit }}"' in text  # GHA braces survive the stamping
+    # CI recreates the gitignored mise.local.toml opt-in keys
+    assert "mise.local.toml" in text
+    # hand tweaks or a hand-bumped ref are drift, not ownership
+    wf.write_text(text.replace(f"ref: v{cli.__version__}", "ref: v9.9.9", 1))
+    assert cli.cmd_check(repo, SPEC) == 1
+    assert cli.cmd_refresh(repo, SPEC) == 0  # refresh re-stamps, don't hand-edit
+    assert cli.cmd_check(repo, SPEC) == 0
+
+
 def test_init_scaffolds_without_touching_mise(tmp_path, capsys):
     repo = make_repo(tmp_path, "repo", "golang.openapi.json")
     assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
@@ -97,7 +121,6 @@ def test_init_scaffolds_without_touching_mise(tmp_path, capsys):
         "docs/explanation/index.md",
         "docs/references/index.md",
         "zensical.toml",
-        ".github/workflows/docs.yml",
         *generated_rels(),
     ):
         assert (repo / rel).is_file(), rel
@@ -149,10 +172,15 @@ def test_init_checkout_mode_records_absolute_kit_path(tmp_path, capsys, monkeypa
     monkeypatch.setattr(cli, "pull_tasks", _boom)
     monkeypatch.delenv("DOCS_KIT_SKIP_PULL", raising=False)
     assert cli.cmd_init(repo, SPEC, False, "/abs/docs-kit-checkout") == 0
-    out = capsys.readouterr().out
-    assert 'docs_kit = "/abs/docs-kit-checkout"' in out
+    capsys.readouterr()
+    assert (repo / "mise.local.toml").read_text() == cli._mise_block(
+        "/abs/docs-kit-checkout"
+    )
+    assert (
+        'docs_kit = "/abs/docs-kit-checkout"' in (repo / "mise.local.toml").read_text()
+    )
     assert not (repo / ".mise.toml").exists()
-    assert not (repo / ".docs-kit").exists()  # checkout mode creates nothing
+    assert not (repo / ".docs-kit").exists()  # checkout mode creates nothing else
 
 
 def test_init_reports_legacy_mise_lines_but_never_rewrites(tmp_path, capsys):
@@ -203,6 +231,77 @@ def test_opt_in_hints_on_existing_mise_local(tmp_path, capsys):
     assert (repo / "mise.local.toml").read_text() == old  # still untouched
 
 
+def _pull_ok(monkeypatch):
+    """Make init's shim sync succeed and actually run (autouse fixture skips it)."""
+    monkeypatch.delenv("DOCS_KIT_SKIP_PULL", raising=False)
+
+    def fake(root, shim, version=cli.__version__):
+        (root / shim).mkdir(parents=True, exist_ok=True)
+        return f"v{version}"
+
+    monkeypatch.setattr(cli, "pull_tasks", fake)
+
+
+def test_init_creates_mise_local_when_absent(tmp_path, capsys, monkeypatch):
+    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
+    _pull_ok(monkeypatch)
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
+    out = capsys.readouterr().out
+    assert (repo / "mise.local.toml").read_text() == cli._mise_block(".docs-kit")
+    assert (
+        tomllib.loads((repo / "mise.local.toml").read_text())["vars"]["docs_kit"]
+        == ".docs-kit"
+    )
+    assert "created" in out and "copy-paste" not in out and "OUTDATED" not in out
+    before = (repo / "mise.local.toml").read_bytes()
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0  # repair no-op
+    assert (repo / "mise.local.toml").read_bytes() == before
+    assert "copy-paste" not in capsys.readouterr().out
+
+
+def test_init_appends_keys_to_simple_mise_local(tmp_path, capsys, monkeypatch):
+    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
+    (repo / "mise.local.toml").write_text('[tools]\nuv = "latest"\n')
+    _pull_ok(monkeypatch)
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
+    out = capsys.readouterr().out
+    assert "appended" in out and "copy-paste" not in out
+    txt = (repo / "mise.local.toml").read_text()
+    assert txt.startswith('[tools]\nuv = "latest"')
+    assert tomllib.loads(txt)["vars"]["docs_kit"] == ".docs-kit"
+    before = (repo / "mise.local.toml").read_bytes()
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0  # detected, untouched
+    assert (repo / "mise.local.toml").read_bytes() == before
+    assert "appended" not in capsys.readouterr().out
+
+
+def test_init_refuses_risky_mise_local_merge(tmp_path, capsys, monkeypatch):
+    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
+    (repo / "mise.local.toml").write_text(
+        '[vars]\nMY_VAR = "1"\n'
+    )  # would duplicate [vars]
+    _pull_ok(monkeypatch)
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
+    out = capsys.readouterr().out
+    assert "copy-paste" in out  # manual paste/merge guidance, file untouched
+    assert (repo / "mise.local.toml").read_text() == '[vars]\nMY_VAR = "1"\n'
+
+
+def test_init_writes_no_mise_local_when_pull_fails(tmp_path, capsys, monkeypatch):
+    repo = make_repo(tmp_path, "repo", "golang.openapi.json")
+    monkeypatch.delenv("DOCS_KIT_SKIP_PULL", raising=False)
+
+    def _fail(root, shim, version=cli.__version__):
+        raise RuntimeError("no payload at v9.9.9")
+
+    monkeypatch.setattr(cli, "pull_tasks", _fail)
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert not (repo / "mise.local.toml").exists()  # broken include never wired
+    assert "copy-paste" in out  # block printed for a later manual opt-in
+
+
 def test_init_without_mise(tmp_path, capsys):
     repo = make_repo(tmp_path, "repo", "golang.openapi.json")
     mise = repo / ".mise.toml"
@@ -224,7 +323,6 @@ def test_init_without_mise(tmp_path, capsys):
         "docs/explanation/index.md",
         "docs/references/index.md",
         "zensical.toml",
-        ".github/workflows/docs.yml",
         *generated_rels(),
     ):
         assert (repo / rel).is_file(), rel

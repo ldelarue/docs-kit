@@ -16,6 +16,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 from . import __version__, render
@@ -35,6 +36,7 @@ GITIGNORE_ENTRIES = ("site/", ".cache/")
 MISE_GITIGNORE_ENTRIES = (".docs-kit/", "mise.local.toml")
 
 DEFAULT_SHIM = ".docs-kit"
+MISE_LOCAL = "mise.local.toml"
 DOCS_SNIPPET = "{{ vars.docs_kit }}/shared/mise/docs.toml"
 MISE_BLOCK_MARK = re.compile(r"^\s*docs_kit\s*=", re.MULTILINE)
 KIT_REPO_URL = "git@github.com:ldelarue/docs-kit.git"
@@ -92,6 +94,7 @@ def _generated_outputs(root: Path, spec_name: str) -> list[tuple[Path, str]]:
             root / ENDPOINTS_PAGE,
             generate_endpoints_page(spec, "reference/openapi.json", REGEN_CMD),
         ),
+        (root / WORKFLOW, render.render_workflow_yml()),
     ]
 
 
@@ -146,7 +149,6 @@ def _scaffold_files(root: Path, spec_name: str) -> list[tuple[Path, str]]:
             render.render_section_stub("References"),
         ),
         (root / ZENSONFIG, render.render_zensical_toml(title, description)),
-        (root / WORKFLOW, render.render_workflow_yml()),
     ]
 
 
@@ -345,11 +347,55 @@ def _report_legacy_mise_lines(root: Path) -> None:
 def _mise_opt_in(root: Path) -> str:
     """The user's mise config(s) as pasted, if any - read-only, never written."""
     text = ""
-    for name in ("mise.local.toml", ".mise.toml", "mise.toml"):
+    for name in (MISE_LOCAL, ".mise.toml", "mise.toml"):
         path = root / name
         if path.is_file():
             text += path.read_text(encoding="utf-8")
     return text
+
+
+def _ensure_mise_local(root: Path, block: str) -> bool:
+    """Add the opt-in keys to mise.local.toml, touching nothing else.
+
+    - absent (no docs-kit keys in any mise config) -> created with the block
+    - present, block already in verbatim           -> untouched
+    - present, docs-kit keys present but stale     -> NEVER rewritten (a
+      hand-edited/stale file only gets the printed replace hint)
+    - present, no docs-kit keys at all (simple)    -> block APPENDED iff the
+      merged text re-parses as TOML (no duplicate [vars]/[env]/[task_config]
+      headers); otherwise untouched and left for manual paste
+
+    Returns True when the docs-kit keys are in place afterwards.
+    """
+    path = root / MISE_LOCAL
+    if not path.exists():
+        if MISE_BLOCK_MARK.search(_mise_opt_in(root)):
+            return False
+        _write(path, block)
+        print(_c(f"  {MISE_LOCAL}: created with the docs-kit keys (auto-loaded)", CYAN))
+        return True
+    text = path.read_text(encoding="utf-8")
+    if block.strip() in text or MISE_BLOCK_MARK.search(text):
+        return block.strip() in text
+    merged = text.rstrip("\n") + "\n\n" + block
+    if not _valid_toml(merged):
+        return False
+    _write(path, merged)
+    print(
+        _c(
+            f"  {MISE_LOCAL}: docs-kit keys appended (existing config left as-is)",
+            CYAN,
+        )
+    )
+    return True
+
+
+def _valid_toml(text: str) -> bool:
+    try:
+        tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return False
+    return True
 
 
 def _print_mise_next_steps(root: Path, block: str) -> None:
@@ -357,8 +403,12 @@ def _print_mise_next_steps(root: Path, block: str) -> None:
     shown = None
     if not MISE_BLOCK_MARK.search(current):
         shown = (
-            _c("next step - copy-paste this block once into a mise config file,", CYAN),
-            _c("  or merge its three keys into the tables you already have:", CYAN),
+            _c(
+                "next step - copy-paste this block into mise.local.toml (init can\n"
+                "  only append it when your config has none of the [vars]/[env]/[task_config]\n"
+                "  tables yet); or merge its three keys into the tables you already have:",
+                CYAN,
+            ),
         )
     elif block.strip() not in current:
         shown = (
@@ -387,14 +437,21 @@ def _print_mise_next_steps(root: Path, block: str) -> None:
 def _mise_step(root: Path, kit_home: str) -> None:
     _report_legacy_mise_lines(root)
     block = _mise_block(kit_home)
+    # only point mise at the include once it can resolve it: a checkout
+    # provides shared/mise straight away, a shim once its pull landed (or
+    # when DOCS_KIT_SKIP_PULL runs init without syncing - nothing to create)
+    layer_ready = not _is_shim(kit_home)
     if _is_shim(kit_home) and not os.environ.get("DOCS_KIT_SKIP_PULL"):
         try:
             tag = pull_tasks(root, kit_home)
             print(f"  task layer: {kit_home}/ shared/mise pinned at {tag}")
+            layer_ready = True
         except (RuntimeError, OSError) as exc:
             print(_c(f"  WARNING: task layer sync failed: {exc}", YELLOW))
             print("  docs:* tasks stay unavailable/reverted until the pull succeeds;")
             print("  retry with `docs-kit pull-tasks` (init itself completed fine).")
+    if layer_ready:
+        _ensure_mise_local(root, block)
     _print_mise_next_steps(root, block)
 
 
@@ -423,10 +480,14 @@ def cmd_init(
     - missing files                             -> written
     - byte-identical files                      -> skipped
     - existing files that differ (hand edits)   -> only overwritten with --force
-    - .mise.toml / mise.local.toml              -> NEVER written or modified;
-      legacy generated lines are reported for manual removal
+    - mise.local.toml absent (and no opt-in in other mise configs, and the
+      task layer ready)   -> created with the opt-in keys (git-ignored)
+    - mise.local.toml / .mise.toml present      -> NEVER written or modified;
+      the block is printed for manual copy-paste/merge, and legacy generated
+      lines in .mise.toml are reported for manual removal
     - mise mode (default) additionally prints the opt-in mise.local.toml
-      block and, for shim installs, pins shared/mise into <kit-home>/
+      block when it could not be auto-created and, for shim installs, pins
+      shared/mise into <kit-home>/
       (DOCS_KIT_SKIP_PULL=1 skips the sync; checkout installs never pull)
     """
     scaffold = [(p, c, "scaffold") for p, c in _scaffold_files(root, spec_name)]

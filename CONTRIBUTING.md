@@ -32,8 +32,9 @@ Everything the [README](README.md) deliberately leaves out: design guarantees, t
   copy-paste/merge hint; pasting is then the user's explicit choice.
   `.mise.toml` is **never written**; legacy
   lines from old inits inside `.mise.toml` are quoted in a red cleanup note,
-  never rewritten. `--without-mise` skips all of it (no task-layer pull, no
-  keys anywhere; docs scaffold only, existing files left alone).
+  never rewritten. mise integration is opt-in: without `--with-mise`, none of
+  this happens (no task-layer pull, no keys anywhere; docs scaffold only,
+  existing files left alone).
 
 ## Pinning model
 

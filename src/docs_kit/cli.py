@@ -485,7 +485,7 @@ def cmd_init(
     - mise.local.toml / .mise.toml present      -> NEVER written or modified;
       the block is printed for manual copy-paste/merge, and legacy generated
       lines in .mise.toml are reported for manual removal
-    - mise mode (default) additionally prints the opt-in mise.local.toml
+    - mise mode (--with-mise) additionally prints the opt-in mise.local.toml
       block when it could not be auto-created and, for shim installs, pins
       shared/mise into <kit-home>/
       (DOCS_KIT_SKIP_PULL=1 skips the sync; checkout installs never pull)
@@ -532,8 +532,8 @@ def cmd_init(
     else:
         print(
             _c(
-                "  mise integration skipped (--without-mise); re-run docs-kit init\n"
-                "  without the flag to add the docs:* task layer",
+                "  mise integration skipped (pass --with-mise to add\n"
+                "  the docs:* task layer)",
                 CYAN,
             )
         )
@@ -561,9 +561,9 @@ def main(argv: list[str] | None = None) -> int:
     common(p_init)
     p_init.add_argument("--force", action="store_true", help="overwrite scaffold files")
     p_init.add_argument(
-        "--without-mise",
+        "--with-mise",
         action="store_true",
-        help="skip all mise integration (no task-layer pull, no opt-in block to paste)",
+        help="add mise integration (pulls the .docs-kit task layer, wires the docs:* tasks)",
     )
     p_init.add_argument(
         "--docs-kit",
@@ -599,7 +599,7 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(args.root).resolve()
     if args.command == "init":
         return cmd_init(
-            root, args.spec, args.force, args.docs_kit, use_mise=not args.without_mise
+            root, args.spec, args.force, args.docs_kit, use_mise=args.with_mise
         )
     if args.command == "serve":
         return cmd_serve(root, args.port, args.host)

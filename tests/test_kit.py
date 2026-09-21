@@ -309,7 +309,7 @@ def test_init_without_mise(tmp_path, capsys):
     before = mise.read_bytes()
     assert cli.cmd_init(repo, SPEC, False, ".docs-kit", use_mise=False) == 0
     out = capsys.readouterr().out
-    assert "--without-mise" in out
+    assert "--with-mise" in out
     assert "cleanup" not in out and "copy-paste" not in out and "docs_kit" not in out
     assert not (repo / ".docs-kit").exists()  # no dir, no template, no layer
     assert not (repo / "mise.local.toml").exists()

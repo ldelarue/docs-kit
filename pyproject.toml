@@ -1,6 +1,6 @@
 [project]
 name = "docs-kit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Scaffold and regenerate a Zensical API documentation site from an OpenAPI spec (stdlib only)."
 readme = "README.md"
 license = "CC-BY-4.0"

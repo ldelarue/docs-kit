@@ -4,6 +4,14 @@ Doc generation is pure file I/O; the only subprocesses anywhere are the
 task-layer syncs (init's best-effort shim update and `pull-tasks`), which
 shell out to git to keep the pinned shared/mise payload at this CLI's tag,
 and `serve`, which runs Zensical's live-reload server (PATH first, uvx else).
+
+What a repository gets is autodetected at every command: an OpenAPI pipeline
+when `openapi.json` (or --spec) is there, a CLI-reference pipeline when CLI
+evidence is (`cli/*.usage.kdl`, a Typer app in pyproject, cobra in go.mod),
+both when both are. The CLI pipeline's pages are rendered by the task layer
+(`shared/mise/render-cli-docs` via mise, calling the `usage` binary);
+this CLI owns the scaffold those pages need: the Zensical nav, the CLI
+standard page and the index; drift is gated by `docs:check` as usual.
 """
 
 from __future__ import annotations
@@ -24,10 +32,16 @@ from .generator import generate_endpoints_page
 
 REGEN_CMD = "docs-kit refresh"
 
+API_SPEC_DEFAULT = "openapi.json"
 VENDORED_SPEC = "docs/reference/openapi.json"
 SWAGGER_PAGE = "docs/reference/swagger.html"
 API_PAGE = "docs/references/api.md"
 ENDPOINTS_PAGE = "docs/references/endpoints.md"
+CLI_DIR = "cli"
+KDL_SUFFIX = ".usage.kdl"
+KDL_EXTRA_SUFFIX = ".usage.extra.kdl"
+CLI_PAGE_DIR = "docs/references/cli"
+CLI_STANDARD_PAGE = "docs/references/cli-standard.md"
 
 ZENSONFIG = "zensical.toml"
 ZENSICAL_VERSION = "0.0.62"
@@ -42,6 +56,108 @@ MISE_BLOCK_MARK = re.compile(r"^\s*docs_kit\s*=", re.MULTILINE)
 KIT_REPO_URL = "git@github.com:ldelarue/docs-kit.git"
 
 RED, YELLOW, CYAN, BOLD, DIM = "31", "33", "36", "1", "2"
+
+
+# ---------------------------------------------------------------------------
+# autodetection: every command works from what the repository actually holds
+
+
+def _kdl_bins(root: Path) -> dict[str, str]:
+    """Bins with a committed contract already: cli/<bin>.usage.kdl."""
+    bins: dict[str, str] = {}
+    cli_dir = root / CLI_DIR
+    if cli_dir.is_dir():
+        for path in sorted(cli_dir.glob(f"*{KDL_SUFFIX}")):
+            if path.name.endswith(KDL_EXTRA_SUFFIX):  # paranoid: extra is *.kdl too
+                continue
+            bins[path.name[: -len(KDL_SUFFIX)]] = "kdl"
+    return bins
+
+
+def _typer_bins(root: Path) -> dict[str, str]:
+    """console-scripts of pyprojects that depend on typer: <name> -> app spec."""
+    py = root / "pyproject.toml"
+    if not py.is_file():
+        return {}
+    try:
+        data = tomllib.loads(py.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError:
+        return {}
+    deps = list(data.get("project", {}).get("dependencies", []))
+    deps += list(data.get("dependency-groups", {}).get("runtime", []))
+    if not any(dep.strip().lower().startswith("typer") for dep in deps):
+        return {}
+    bins: dict[str, str] = {}
+    for name, target in data.get("project", {}).get("scripts", {}).items():
+        module = str(target).partition(":")[0].strip()
+        if module:
+            # convention: the Typer app is <pkg>.cli:app, or the same module's
+            # :app when the script already targets a .cli module (standard §recipe 1)
+            app_spec = (
+                f"{module}.cli:app" if not module.endswith(".cli") else f"{module}:app"
+            )
+            bins[name] = app_spec
+    return bins
+
+
+def _cobra_bins(root: Path) -> dict[str, str]:
+    """module basename of a go.mod requiring spf13/cobra."""
+    gomod = root / "go.mod"
+    if not gomod.is_file() or b"github.com/spf13/cobra" not in gomod.read_bytes():
+        return {}
+    for line in gomod.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("module "):
+            return {line.split("/")[-1].strip(): "go"}
+    return {}
+
+
+def detect_pipelines(
+    root: Path,
+    spec_name: str,
+    spec_explicit: bool,
+    extra_bins: list[str],
+    *,
+    no_api: bool = False,
+    no_cli: bool = False,
+) -> tuple[bool, dict[str, dict[str, str]]]:
+    """(api_active, bins) with bins[bin] = {recipe: python|go|kdl|unknown,
+    app: "<pkg>.cli:app" when known}."""
+    if spec_explicit and not (root / spec_name).is_file():
+        sys.exit(
+            f"ERROR: --spec {spec_name} not found in {root} (pass a path or drop it)."
+        )
+    api_active = (root / spec_name).is_file() and not no_api
+    if no_cli:
+        return api_active, {}
+
+    bins: dict[str, dict[str, str]] = {}
+    for name, app in _typer_bins(root).items():
+        bins[name] = {"recipe": "python", "app": app}
+    for name in _cobra_bins(root):
+        bins.setdefault(name, {"recipe": "go"})
+    for name in _kdl_bins(root):
+        bins.setdefault(
+            name, {"recipe": "kdl"}
+        )  # committed contract, generator maybe unknown
+    for name in extra_bins:
+        bins.setdefault(name, {"recipe": "unknown"})
+    return api_active, bins
+
+
+def _github_detected(root: Path) -> bool:
+    """True on clones/pull-request checkouts of a GitHub repository (and on
+    GitHub Actions itself); the workflow file is meaningless everywhere else,
+    e.g. the st.ovh.net-hosted fleets - init/check must own it only here."""
+    if (root / ".github" / "workflows").is_dir():
+        return True
+    if os.environ.get("GITHUB_REPOSITORY"):
+        return True
+    try:
+        return "github.com" in (root / ".git" / "config").read_text(
+            encoding="utf-8", errors="replace"
+        )
+    except OSError:
+        return False
 
 
 def _c(text: str, code: str) -> str:
@@ -86,20 +202,29 @@ def _read_spec(root: Path, spec_name: str) -> tuple[str, dict]:
     return text, spec
 
 
-def _generated_outputs(root: Path, spec_name: str) -> list[tuple[Path, str]]:
-    text, spec = _read_spec(root, spec_name)
-    info = spec.get("info", {})
-    title = info.get("title") or root.resolve().name
-    return [
-        (root / VENDORED_SPEC, text),
-        (root / SWAGGER_PAGE, render.render_swagger_page(title)),
-        (root / API_PAGE, render.render_api_page()),
-        (
-            root / ENDPOINTS_PAGE,
-            generate_endpoints_page(spec, "reference/openapi.json", REGEN_CMD),
-        ),
-        (root / WORKFLOW, render.render_workflow_yml()),
-    ]
+def _generated_outputs(
+    root: Path, spec_name: str, api: bool, github: bool
+) -> list[tuple[Path, str]]:
+    """The kit-owned generated set for THIS repository: API pages when an
+    OpenAPI spec is present; the CI workflow only on GitHub (the consumer's
+    Pages deploy lives there - a workflow on a Stash-hosted repo is a lie)."""
+    out: list[tuple[Path, str]] = []
+    if api:
+        text, spec = _read_spec(root, spec_name)
+        info = spec.get("info", {})
+        title = info.get("title") or root.resolve().name
+        out += [
+            (root / VENDORED_SPEC, text),
+            (root / SWAGGER_PAGE, render.render_swagger_page(title)),
+            (root / API_PAGE, render.render_api_page()),
+            (
+                root / ENDPOINTS_PAGE,
+                generate_endpoints_page(spec, "reference/openapi.json", REGEN_CMD),
+            ),
+        ]
+    if github:
+        out.append((root / WORKFLOW, render.render_workflow_yml()))
+    return out
 
 
 def _write(path: Path, content: str) -> None:
@@ -107,16 +232,51 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8", newline="\n")
 
 
-def cmd_refresh(root: Path, spec_name: str) -> int:
-    for path, content in _generated_outputs(root, spec_name):
+def cmd_refresh(
+    root: Path,
+    spec_name: str = API_SPEC_DEFAULT,
+    *,
+    spec_explicit: bool = False,
+    extra_bins: list[str] | None = None,
+    no_api: bool = False,
+    no_cli: bool = False,
+) -> int:
+    api, bins = detect_pipelines(
+        root, spec_name, spec_explicit, extra_bins or [], no_api=no_api, no_cli=no_cli
+    )
+    for path, content in _generated_outputs(
+        root, spec_name, api, _github_detected(root)
+    ):
         _write(path, content)
         print(f"  {_c('+', CYAN)} {path.relative_to(root)}")
+    if bins and not (root / CLI_STANDARD_PAGE).is_file():
+        print(
+            _c(
+                f"  note: CLI{'' if len(bins) == 1 else 's'} detected"
+                f" ({', '.join(sorted(bins))}) - run `docs-kit init` to scaffold"
+                " the reference pages, `mise run docs:refresh` to render them",
+                DIM,
+            )
+        )
     return 0
 
 
-def cmd_check(root: Path, spec_name: str) -> int:
+def cmd_check(
+    root: Path,
+    spec_name: str = API_SPEC_DEFAULT,
+    *,
+    spec_explicit: bool = False,
+    extra_bins: list[str] | None = None,
+    no_api: bool = False,
+    no_cli: bool = False,
+) -> int:
+    api, _bins = detect_pipelines(
+        root, spec_name, spec_explicit, extra_bins or [], no_api=no_api, no_cli=no_cli
+    )
     stale: list[str] = []
-    for path, content in _generated_outputs(root, spec_name):
+    for path, content in _generated_outputs(
+        root, spec_name, api, _github_detected(root)
+    ):
         rel = str(path.relative_to(root))
         if not path.exists():
             stale.append(f"missing: {rel}")
@@ -132,13 +292,22 @@ def cmd_check(root: Path, spec_name: str) -> int:
     return 0
 
 
-def _scaffold_files(root: Path, spec_name: str) -> list[tuple[Path, str]]:
-    _, spec = _read_spec(root, spec_name)
-    info = spec.get("info", {})
-    title = info.get("title") or root.resolve().name
-    description = info.get("description") or ""
-    return [
-        (root / "docs" / "index.md", render.render_index_page(title, description)),
+def _scaffold_files(
+    root: Path, spec_name: str, api: bool, bins: dict[str, dict[str, str]]
+) -> list[tuple[Path, str]]:
+    title, description = "", ""
+    if api:
+        _, spec = _read_spec(root, spec_name)
+        info = spec.get("info", {})
+        title = info.get("title") or root.resolve().name
+        description = info.get("description") or ""
+    else:
+        title = root.resolve().name
+    files: list[tuple[Path, str]] = [
+        (
+            root / "docs" / "index.md",
+            render.render_index_page(title, description, api=api, cli=bool(bins)),
+        ),
         (
             root / "docs" / "tutorials" / "index.md",
             render.render_section_stub("Tutorials"),
@@ -152,8 +321,21 @@ def _scaffold_files(root: Path, spec_name: str) -> list[tuple[Path, str]]:
             root / "docs" / "references" / "index.md",
             render.render_section_stub("References"),
         ),
-        (root / ZENSONFIG, render.render_zensical_toml(title, description)),
+        (
+            root / ZENSONFIG,
+            render.render_zensical_toml(title, description, api=api, bins=bins),
+        ),
     ]
+    if bins:
+        files.append(
+            (
+                root / CLI_STANDARD_PAGE,
+                render.render_cli_standard_page(
+                    root.resolve().name, bins, cli_page_dir="references/cli"
+                ),
+            )
+        )
+    return files
 
 
 def pull_tasks(root: Path, shim: str = DEFAULT_SHIM, version: str = __version__) -> str:
@@ -309,14 +491,21 @@ def cmd_serve(root: Path, port: int | None, host: str) -> int:
         sys.exit(f"ERROR: cannot start the docs server: {exc}")
 
 
-def _mise_block(kit_home: str) -> str:
-    """The comment-free block users copy into their own mise config (opt-in)."""
-    return (
+def _mise_block(kit_home: str, cli: bool = False) -> str:
+    """The comment-free block users copy into their own mise config (opt-in).
+
+    [tools] usage is only for repos with a CLI pipeline: `usage` renders the
+    reference pages from the KDL contracts (shared/mise/render-cli-docs).
+    """
+    block = (
         "[vars]\n"
         f'docs_kit = "{kit_home}"\n\n[env]\n'
         'DOCS_KIT = "{{ vars.docs_kit }}"\n\n[task_config]\n'
         f'includes = ["{DOCS_SNIPPET}"]\n'
     )
+    if cli:
+        block += '\n[tools]\nusage = "latest"\n'
+    return block
 
 
 _LEGACY_MISE_RE = re.compile(
@@ -423,16 +612,16 @@ def _print_mise_next_steps(root: Path, block: str) -> None:
         print(block.rstrip("\n"))
         print(
             _c(
-                "  (keep only ONE [vars], [env] and [task_config] header each - a duplicate\n"
-                "   is invalid TOML and mise then skips the whole file)",
+                "  (keep only ONE [vars], [env], [task_config] and [tools] header each - a\n"
+                "   duplicate is invalid TOML and mise then skips the whole file)",
                 YELLOW,
             )
         )
 
 
-def _mise_step(root: Path, kit_home: str) -> None:
+def _mise_step(root: Path, kit_home: str, cli: bool = False) -> None:
     _report_legacy_mise_lines(root)
-    block = _mise_block(kit_home)
+    block = _mise_block(kit_home, cli=cli)
     # only point mise at the include once it can resolve it: a checkout
     # provides shared/mise straight away, a shim once its pull landed (or
     # when DOCS_KIT_SKIP_PULL runs init without syncing - nothing to create)
@@ -479,9 +668,23 @@ def _report_group(title: str, written: list[str], unchanged: list[str]) -> None:
 
 
 def cmd_init(
-    root: Path, spec_name: str, force: bool, kit_home: str, use_mise: bool = False
+    root: Path,
+    spec_name: str = API_SPEC_DEFAULT,
+    force: bool = False,
+    kit_home: str = DEFAULT_SHIM,
+    use_mise: bool = False,
+    *,
+    spec_explicit: bool = False,
+    extra_bins: list[str] | None = None,
+    no_api: bool = False,
+    no_cli: bool = False,
 ) -> int:
     """Install or repair the docs integration (idempotent).
+
+    Pipelines are autodetected: API pages for an OpenAPI spec when present,
+    a CLI reference scaffold when `cli/*.usage.kdl`, a Typer console-script,
+    or cobra-in-go.mod evidence exists (or --bin names one). With neither in
+    sight init refuses rather than scaffolding an empty site.
 
     - missing files                             -> written
     - byte-identical files                      -> skipped
@@ -496,9 +699,24 @@ def cmd_init(
       shared/mise into <kit-home>/
       (DOCS_KIT_SKIP_PULL=1 skips the sync; checkout installs never pull)
     """
+    api, bins = detect_pipelines(
+        root, spec_name, spec_explicit, extra_bins or [], no_api=no_api, no_cli=no_cli
+    )
+    github = _github_detected(root)
+    if not api and not bins and not github:
+        sys.exit(
+            "ERROR: no documentation source detected: no openapi.json, and no CLI "
+            "evidence (cli/<bin>.usage.kdl, a typer console-script in pyproject.toml, "
+            "or spf13/cobra in go.mod); name a CLI with --bin BIN, or pass --spec."
+        )
+    detected = ", ".join(
+        ([f"API ({spec_name})"] if api else [])
+        + sorted(bins)
+        + (["workflow:github"] if github else [])
+    )
     groups = {
-        "Scaffold": _scaffold_files(root, spec_name),
-        "Generated": _generated_outputs(root, spec_name),
+        "Scaffold": _scaffold_files(root, spec_name, api, bins),
+        "Generated": _generated_outputs(root, spec_name, api, github),
     }
     plan: list[tuple[Path, str]] = []
     written: dict[str, list[str]] = {}
@@ -532,7 +750,7 @@ def cmd_init(
         sys.exit("\n".join(parts))
 
     print(_c(f"docs-kit {__version__} · init", BOLD))
-    print(_c(f"  repo {root}   spec {spec_name}", DIM))
+    print(_c(f"  repo {root}   detected {detected}", DIM))
     for path, content in plan:
         _write(path, content)
     for title in groups:
@@ -540,7 +758,7 @@ def cmd_init(
 
     _section("mise")
     if use_mise:
-        _mise_step(root, kit_home)
+        _mise_step(root, kit_home, cli=bool(bins))
     else:
         print(_c("  skipped - pass --with-mise to wire the docs:* tasks", DIM))
 
@@ -548,13 +766,64 @@ def cmd_init(
     _integrate_gitignore(root, use_mise)
 
     _section("Next steps")
-    if use_mise:
-        print("  mise run docs:refresh   regenerate the reference pages")
-        print("  mise run docs:build     build the site, then commit")
-    else:
-        print(f"  {REGEN_CMD}    regenerate the reference pages")
-        print("  docs-kit serve      preview with live reload")
+    for line in _next_steps(root, bins, use_mise):
+        print(line)
     return 0
+
+
+def _next_steps(
+    root: Path, bins: dict[str, dict[str, str]], use_mise: bool
+) -> list[str]:
+    steps = []
+    if use_mise:
+        steps += [
+            "  mise run docs:refresh   regenerate the reference pages",
+            "  mise run docs:build     build the site, then commit",
+        ]
+    else:
+        steps += [
+            f"  {REGEN_CMD}    regenerate the reference pages",
+            "  docs-kit serve      preview with live reload",
+        ]
+    if bins:
+        steps += [
+            _c(
+                "  CLI reference pipeline (usage): every <bin>.md renders from",
+                DIM,
+            ),
+            _c("  cli/<bin>.usage.kdl - see docs/references/cli-standard.md:", DIM),
+        ]
+        for name in sorted(bins):
+            info = bins[name]
+            if info["recipe"] == "kdl":
+                steps.append(
+                    _c(f"    {name}: contract ready -> mise run docs:refresh", DIM)
+                )
+            elif info["recipe"] == "python":
+                steps.append(
+                    _c(
+                        f"    {name}: add usage-spec-typer to [dependency-groups] dev "
+                        'and a "cli:spec" task (recipe in cli-standard.md)',
+                        DIM,
+                    )
+                )
+            elif info["recipe"] == "go":
+                steps.append(
+                    _c(
+                        f"    {name}: add the --usage-spec hidden flag "
+                        "(cobra_usage) and a cli:spec task (recipe in cli-standard.md)",
+                        DIM,
+                    )
+                )
+            else:
+                steps.append(
+                    _c(
+                        f"    {name}: hand-write cli/{name}.usage.kdl + extras "
+                        "(recipe in cli-standard.md)",
+                        DIM,
+                    )
+                )
+    return steps
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -569,7 +838,28 @@ def main(argv: list[str] | None = None) -> int:
             "root", nargs="?", default=".", help="target repo (default: cwd)"
         )
         p.add_argument(
-            "--spec", default="openapi.json", help="spec file relative to root"
+            "--spec",
+            default=None,
+            help=f"OpenAPI spec file relative to root (default: {API_SPEC_DEFAULT} "
+            "when present; the API pipeline is skipped when it is not)",
+        )
+        p.add_argument(
+            "--bin",
+            action="append",
+            default=[],
+            metavar="NAME",
+            help="name a CLI binary explicitly (repeatable); otherwise CLIs are "
+            "detected from cli/*.usage.kdl, typer console scripts, or go.mod+cobra",
+        )
+        p.add_argument(
+            "--no-api",
+            action="store_true",
+            help="never run the OpenAPI pipeline, even when openapi.json is present",
+        )
+        p.add_argument(
+            "--no-cli",
+            action="store_true",
+            help="never run the CLI-reference pipeline, even when CLI evidence is present",
         )
 
     p_init = sub.add_parser("init", help="scaffold a Zensical docs site in a repo")
@@ -614,15 +904,37 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(args.root).resolve()
     if args.command == "init":
         return cmd_init(
-            root, args.spec, args.force, args.docs_kit, use_mise=args.with_mise
+            root,
+            args.spec or API_SPEC_DEFAULT,
+            args.force,
+            args.docs_kit,
+            use_mise=args.with_mise,
+            spec_explicit=args.spec is not None,
+            extra_bins=args.bin,
+            no_api=args.no_api,
+            no_cli=args.no_cli,
         )
     if args.command == "serve":
         return cmd_serve(root, args.port, args.host)
     if args.command == "refresh":
-        return cmd_refresh(root, args.spec)
+        return cmd_refresh(
+            root,
+            args.spec or API_SPEC_DEFAULT,
+            spec_explicit=args.spec is not None,
+            extra_bins=args.bin,
+            no_api=args.no_api,
+            no_cli=args.no_cli,
+        )
     if args.command == "pull-tasks":
         return cmd_pull_tasks(root, _default_kit_home())
-    return cmd_check(root, args.spec)
+    return cmd_check(
+        root,
+        args.spec or API_SPEC_DEFAULT,
+        spec_explicit=args.spec is not None,
+        extra_bins=args.bin,
+        no_api=args.no_api,
+        no_cli=args.no_cli,
+    )
 
 
 if __name__ == "__main__":

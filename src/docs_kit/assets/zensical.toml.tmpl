@@ -5,7 +5,8 @@ site_description = {site_description}
 site_url = "https://example.com"
 
 # Diataxis structure: the top-level nav entries become header tabs
-# (navigation.tabs feature). API reference pages are GENERATED -- see README.
+# (navigation.tabs feature). API and CLI reference pages are GENERATED -- see
+# README / docs/references/cli-standard.md.
 nav = [
   {{ "Home" = "index.md" }},
   {{ "Tutorials" = ["tutorials/index.md"] }},
@@ -13,7 +14,7 @@ nav = [
   {{ "Explanation" = ["explanation/index.md"] }},
   {{ "References" = [
     "references/index.md",
-    {{ "API" = ["references/api.md", "references/endpoints.md"] }},
+    {api_nav}{cli_nav}
   ] }},
 ]
 

@@ -14,6 +14,10 @@ docs-kit = "docs_kit.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    # for tests/test_usage_spec.py: the helper runs in the *consumer's* venv,
+    # docs-kit itself stays stdlib; tests exercise the shapes these produce
+    "typer>=0.27.0",
+    "usage-spec-typer>=1.2.1",
 ]
 
 [build-system]

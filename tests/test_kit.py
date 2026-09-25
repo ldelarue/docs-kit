@@ -22,11 +22,14 @@ def _skip_layer_pull(monkeypatch):
     monkeypatch.setenv("DOCS_KIT_SKIP_PULL", "1")
 
 
-def make_repo(base: Path, name: str, fixture: str) -> Path:
+def make_repo(base: Path, name: str, fixture: str, github: bool = True) -> Path:
     repo = base / name
     repo.mkdir(parents=True, exist_ok=True)
     shutil.copy(FIXTURES / fixture, repo / SPEC)
-
+    if github:
+        # the workflow file is generated only where it can run: a clone with
+        # a GitHub remote (or CI env var); the dir marker stands in for both
+        (repo / ".github" / "workflows").mkdir(parents=True)
     return repo
 
 
@@ -539,3 +542,148 @@ def test_serve_without_any_server_tool_exits(tmp_path, monkeypatch):
     monkeypatch.setattr(cli.shutil, "which", lambda n: None)
     with pytest.raises(SystemExit):
         cli.main(["serve", str(tmp_path)])
+
+
+# ---------------------------------------------------------------------------
+# autodetection: API / CLI / both / neither, the GitHub gate and [tools] usage
+
+
+TYPER_PYPROJECT = (
+    '[project]\nname = "mytool"\nversion = "0.1.0"\n'
+    'dependencies = ["typer>=0.12", "rich"]\n'
+    '[project.scripts]\nmytool = "mytool.cli:app"\n\n'
+    '[dependency-groups]\ndev = ["usage-spec-typer>=1.2.1"]\n'
+)
+
+
+def make_cli_repo(
+    base: Path, name: str, *, typer: bool = True, kdl: tuple = ()
+) -> Path:
+    repo = base / name
+    repo.mkdir(parents=True)
+    if typer:
+        (repo / "pyproject.toml").write_text(TYPER_PYPROJECT)
+    for bin_name in kdl:
+        d = repo / "cli"
+        d.mkdir(exist_ok=True)
+        (d / f"{bin_name}.usage.kdl").write_text(f'cmd "{bin_name}" {{\n}}\n')
+        (d / f"{bin_name}.usage.extra.kdl").write_text("# curated extras\n")
+    return repo
+
+
+def test_detect_cli_only_typer(tmp_path):
+    repo = make_cli_repo(tmp_path, "tool")
+    api, bins = cli.detect_pipelines(repo, SPEC, False, [])
+    assert not api
+    assert bins == {"mytool": {"recipe": "python", "app": "mytool.cli:app"}}
+
+
+def test_detect_committed_kdl_and_ignores_extras(tmp_path):
+    repo = tmp_path / "repo"
+    d = repo / "cli"
+    d.mkdir(parents=True)
+    (d / "tool.usage.kdl").write_text('cmd "tool" {}\n')
+    (d / "tool.usage.extra.kdl").write_text("# curated\n")
+    _, bins = cli.detect_pipelines(repo, SPEC, False, [])
+    assert bins == {"tool": {"recipe": "kdl"}}
+
+
+def test_detect_cobra_and_explicit_bins(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "go.mod").write_text(
+        "module github.com/acme/goodtool\n\ngithub.com/spf13/cobra v1.10.2\n"
+    )
+    _, bins = cli.detect_pipelines(repo, SPEC, False, ["other-cli"])
+    assert bins["goodtool"]["recipe"] == "go"
+    assert bins["other-cli"]["recipe"] == "unknown"
+
+
+def test_no_api_no_cli_overrides(tmp_path):
+    repo = make_repo(tmp_path, "both", "golang.openapi.json")
+    (repo / "cli").mkdir()
+    (repo / "cli" / "tool.usage.kdl").write_text('cmd "tool" {}\n')
+    api, bins = cli.detect_pipelines(repo, SPEC, False, [])
+    assert api and bins
+    api, bins = cli.detect_pipelines(repo, SPEC, False, [], no_cli=True)
+    assert api and bins == {}
+    api, bins = cli.detect_pipelines(repo, SPEC, False, [], no_api=True)
+    assert not api and bins
+
+
+def test_init_cli_only_repo_end_to_end(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    repo = make_cli_repo(tmp_path, "toolrepo")
+    assert cli.cmd_init(repo, SPEC, False, "/abs/kit", use_mise=True) == 0
+    zens = (repo / cli.ZENSONFIG).read_text()
+    assert "references/cli/mytool.md" in zens
+    assert "references/cli-standard.md" in zens
+    assert "references/api.md" not in zens
+    assert (repo / cli.CLI_STANDARD_PAGE).is_file()
+    assert "mytool" in (repo / cli.CLI_STANDARD_PAGE).read_text()
+    assert not (repo / cli.API_PAGE).exists()
+    assert not (repo / cli.WORKFLOW).exists()  # no github evidence anywhere
+    # the CLI pipeline needs the usage binary -> the opt-in block pins it
+    assert tomllib.loads((repo / "mise.local.toml").read_text())["tools"]["usage"]
+    assert cli.cmd_refresh(repo, SPEC) == 0
+    assert cli.cmd_check(repo, SPEC) == 0
+
+
+def test_init_api_only_block_has_no_tools(tmp_path):
+    repo = make_repo(tmp_path, "api", "golang.openapi.json")
+    assert cli.cmd_init(repo, SPEC, False, "/abs/kit", use_mise=True) == 0
+    block = tomllib.loads((repo / "mise.local.toml").read_text())
+    assert "tools" not in block
+    block2 = tomllib.loads(cli._mise_block("k", cli=True))
+    assert block2["tools"]["usage"] == "latest"
+
+
+def test_init_both_pipelines_scaffolds_everything(tmp_path):
+    repo = make_repo(tmp_path, "both", "golang.openapi.json")
+    (repo / "pyproject.toml").write_text(TYPER_PYPROJECT)
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
+    for rel in generated_rels() + (cli.CLI_STANDARD_PAGE,):
+        assert (repo / rel).is_file(), rel
+    zens = (repo / cli.ZENSONFIG).read_text()
+    assert "references/endpoints.md" in zens and "references/cli/mytool.md" in zens
+
+
+def test_init_neither_pipeline_refuses(tmp_path):
+    repo = tmp_path / "empty"
+    repo.mkdir()
+    (repo / "README.md").write_text("# nothing to document\n")
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_init(repo, SPEC, False, ".docs-kit")
+    assert "no documentation source detected" in str(exc.value)
+
+
+def test_workflow_only_when_github_detected(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    repo = make_repo(tmp_path, "stashy", "golang.openapi.json", github=False)
+    assert cli.cmd_init(repo, SPEC, False, ".docs-kit") == 0
+    assert not (repo / cli.WORKFLOW).exists()
+    assert cli.cmd_check(repo, SPEC) == 0  # check must not demand a workflow
+    assert cli.cmd_refresh(repo, SPEC) == 0
+    assert not (repo / cli.WORKFLOW).exists()
+
+
+def test_github_detected_via_git_config(tmp_path, monkeypatch):
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    repo = make_repo(tmp_path, "clone", "golang.openapi.json", github=False)
+    (repo / ".git").mkdir()
+    (repo / ".git" / "config").write_text(
+        '[remote "origin"]\n\turl = git@github.com:acme/tool.git\n'
+    )
+    assert cli.cmd_refresh(repo, SPEC) == 0
+    assert (repo / cli.WORKFLOW).is_file()
+    (repo / ".git" / "config").write_text(
+        '[remote "origin"]\n\turl = git@stash.ovh.net:~acme/tool.git\n'
+    )
+    (repo / cli.WORKFLOW).unlink()
+    (repo / cli.WORKFLOW).parent.rmdir()
+    (repo / ".github").rmdir()  # a leftover dir marker also says GitHub: remove both
+    (repo / ".git" / "config").write_text(
+        '[remote "origin"]\n\turl = git@stash.ovh.net:~acme/tool.git\n'
+    )
+    assert cli.cmd_refresh(repo, SPEC) == 0
+    assert not (repo / cli.WORKFLOW).exists()  # never written, never removed

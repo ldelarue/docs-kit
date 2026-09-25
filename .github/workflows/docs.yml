@@ -48,7 +48,7 @@ jobs:
         with:
           repository: ldelarue/docs-kit
           path: .docs-kit
-          ref: v0.3.0
+          ref: v0.4.0
       - run: printf '[vars]\ndocs_kit = "%s/.docs-kit"\n[env]\nDOCS_KIT = "{{ vars.docs_kit }}"\n[task_config]\nincludes = ["{{ vars.docs_kit }}/shared/mise/docs.toml"]\n' "$GITHUB_WORKSPACE" > mise.local.toml
 
       - uses: jdx/mise-action@v4
@@ -78,7 +78,7 @@ jobs:
         with:
           repository: ldelarue/docs-kit
           path: .docs-kit
-          ref: v0.3.0
+          ref: v0.4.0
       - run: printf '[vars]\ndocs_kit = "%s/.docs-kit"\n[env]\nDOCS_KIT = "{{ vars.docs_kit }}"\n[task_config]\nincludes = ["{{ vars.docs_kit }}/shared/mise/docs.toml"]\n' "$GITHUB_WORKSPACE" > mise.local.toml
 
       - uses: jdx/mise-action@v4

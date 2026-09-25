@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/ldelarue/docs-kit/compare/v0.3.0...v0.4.0) (2026-09-25)
+
+
+### Features
+
+* self-host docs site on GitHub Pages (public kit clone; no DOCS_KIT_PAT) ([fe72478](https://github.com/ldelarue/docs-kit/commit/fe72478d41fb0ae353c89872a7c2f746ec101273))
+* usage-based CLI docs pipeline (autodetected, GitHub-gated) ([baf8fd0](https://github.com/ldelarue/docs-kit/commit/baf8fd039b7634a9b55c373a9bb8a59494a6256e))
+
+
+### Bug Fixes
+
+* init refuses without a doc source even on GitHub Actions runners ([0465685](https://github.com/ldelarue/docs-kit/commit/046568538a8ffbfa6bea62fede3614c902b08f28))
+
 ## [0.3.0](https://github.com/ldelarue/docs-kit/compare/v0.2.0...v0.3.0) (2026-09-21)
 
 

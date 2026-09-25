@@ -8,7 +8,8 @@ name: Bump
 # attaches the wheels and moves `latest`.
 # publish is called rather than listening for `on: release`, because events
 # generated with GITHUB_TOKEN (release.created, the tag push) never start
-# workflows; a called workflow always sees the release, no PAT required.
+# workflows; a called workflow always sees the release, no PAT required. The
+# same goes for the docs deploy below.
 
 on:
   push:
@@ -23,6 +24,10 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  # ceiling for the called docs.yml (a called workflow cannot exceed the
+  # caller's permissions): the deploy job runs configure/deploy-pages
+  pages: write
+  id-token: write
 
 jobs:
   release-please:
@@ -59,3 +64,14 @@ jobs:
     with:
       tag: ${{ needs.release-please.outputs.tag_name }}
       move_latest_to: ${{ needs.release-please.outputs.sha }}
+
+  deploy-docs:
+    # Docs for the release commit: docs.yml is called (not `on: release`),
+    # same GITHUB_TOKEN reason as publish above. The push-to-main run already
+    # deployed the same commit; this job guarantees a deployment is tied to
+    # the release itself. No secrets are needed: docs.yml checks ldelarue/docs-kit
+    # out of the public repo with the default GITHUB_TOKEN, so nothing here has
+    # to pass a token down.
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    uses: ./.github/workflows/docs.yml

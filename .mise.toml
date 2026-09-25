@@ -4,6 +4,10 @@ uv = "latest"
 shellcheck = "latest"
 hk = "latest"
 ruff = "latest"
+# CI recreates its own 3-key mise.local.toml without [tools] usage; this repo's
+# CLI pipeline needs the usage binary on every runner (docs-kit's own CI runs
+# `mise install` on the committed .mise.toml).
+usage = "latest"
 
 [tasks.test]
 description = "Run the test suite"
@@ -30,6 +34,11 @@ description = "hk: install the pre-commit hook into .git/hooks (mise-backed)"
 dir = "{{cwd}}"
 run = "hk install --mise"
 
+[tasks."cli:spec"]
+description = "Regenerate cli/docs-kit.usage.kdl from the Typer app"
+dir = "{{cwd}}"
+run = 'uv run python "$DOCS_KIT/shared/mise/usage-spec.py" --typer docs_kit.cli:app --bin docs-kit --extra cli/docs-kit.usage.extra.kdl --out cli/docs-kit.usage.kdl'
+
 [tasks.build]
 description = "Build wheel + sdist into dist/"
 dir = "{{cwd}}"
@@ -38,4 +47,4 @@ run = "uv build"
 [tasks."install-local"]
 description = "Build, then install the wheel as docs-kit on PATH (uv tool)"
 dir = "{{cwd}}"
-run = "uv build && uv tool install --rebuild --force \"$(ls dist/docs_kit-*-py3-none-any.whl | sort -V | tail -1)\""
+run = "uv build && uv tool install --force \"$(ls dist/docs_kit-*-py3-none-any.whl | sort -V | tail -1)\""

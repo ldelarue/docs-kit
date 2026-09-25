@@ -107,6 +107,8 @@ def test_workflow_pin_is_stamped_and_checked(tmp_path):
     assert '"{{ vars.docs_kit }}"' in text  # GHA braces survive the stamping
     # CI recreates the gitignored mise.local.toml opt-in keys
     assert "mise.local.toml" in text
+    # release pipelines call the workflow (a GITHUB_TOKEN `on: release` never fires)
+    assert "workflow_call" in text
     # hand tweaks or a hand-bumped ref are drift, not ownership
     wf.write_text(text.replace(f"ref: v{cli.__version__}", "ref: v9.9.9", 1))
     assert cli.cmd_check(repo, SPEC) == 1

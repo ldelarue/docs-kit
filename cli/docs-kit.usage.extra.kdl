@@ -1,0 +1,26 @@
+// Curated nodes for cli/docs-kit.usage.kdl - spliced into the generated
+// contract by `mise run cli:spec` (docs-kit standard). The command/flag tree
+// is regenerated from the Typer app in src/docs_kit/cli.py; only this file is
+// hand-written. Env settings and exit codes verified against src/docs_kit/cli.py.
+
+config {
+  prop "docs_kit" type="string" default=".docs-kit" help="Where the shared/mise task layer lives: a repo-local shim dir (pulled by init) or an absolute path to a docs-kit clone. --docs-kit overrides." { env "DOCS_KIT" }
+  prop "docs_kit_repo" type="string" default="git@github.com:ldelarue/docs-kit.git" help="Git URL the .docs-kit task layer is fetched from; set it to a file:// URL or mirror to pull the layer from somewhere else." { env "DOCS_KIT_REPO" }
+  prop "docs_kit_skip_pull" type="bool" default="false" help="Any value makes init/refresh skip the best-effort task-layer sync (tests and offline runs)." { env "DOCS_KIT_SKIP_PULL" }
+  prop "docs_port" type="int" default=0 help="Exact port for docs-kit serve; pins the server with no port hunting (serve exits 1 unless it can bind this one)." { env "DOCS_PORT" }
+  prop "free_port_min" type="int" default="8000" help="Lower bound of the leased port range when nothing is pinned; must be an integer." { env "FREE_PORT_MIN" }
+  prop "free_port_max" type="int" default="8999" help="Upper bound of the leased port range when nothing is pinned; must be an integer." { env "FREE_PORT_MAX" }
+  prop "no_color" type="bool" default="false" help="Suppresses the init/refresh ANSI colours even on a terminal." { env "NO_COLOR" }
+}
+
+exit_code 0 "Command succeeded (check prints all files up to date)"
+exit_code 1 "Generated docs stale or missing (check), task-layer sync failure (pull-tasks), port lease exhausted, or bad env values"
+exit_code 2 "Usage error: missing subcommand, unknown flag, invalid --port"
+
+example """
+docs-kit init --with-mise --bin mycli   # CLI-only scaffold + the docs:* mise tasks
+docs-kit refresh                        # regenerate pages, vendored spec, CI workflow
+docs-kit check                          # the drift gate: exit 1 + fix hint on stale docs
+docs-kit serve --port 8010              # live-reload preview on a pinned port
+docs-kit pull-tasks                     # re-pin .docs-kit/ to the installed CLI's tag
+"""

@@ -86,20 +86,22 @@ wheels = [
 name = "docs-kit"
 version = "0.3.0"
 source = { editable = "." }
+dependencies = [
+    { name = "typer" },
+]
 
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
-    { name = "typer" },
     { name = "usage-spec-typer" },
 ]
 
 [package.metadata]
+requires-dist = [{ name = "typer", specifier = ">=0.27.0" }]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "pytest", specifier = ">=9.1.1" },
-    { name = "typer", specifier = ">=0.27.0" },
     { name = "usage-spec-typer", specifier = ">=1.2.1" },
 ]
 

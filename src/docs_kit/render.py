@@ -61,6 +61,7 @@ def render_index_page(
     description: str,
     api: bool = True,
     cli: bool = False,
+    bins: dict[str, dict[str, str]] | None = None,
 ) -> str:
     bullets = []
     if api:
@@ -68,7 +69,16 @@ def render_index_page(
             "- **[API reference](references/api.md)** — interactive Swagger UI plus\n"
             "  generated endpoint tables."
         )
-    if cli:
+    if bins:
+        # link the real pages (there is no page at the directory itself);
+        # same targets as the zensical nav gets
+        for name in sorted(bins):
+            label = "CLI reference" if len(bins) == 1 else f"`{name}` reference"
+            bullets.append(
+                f"- **[{label}](references/cli/{name}.md)** — commands, flags and\n"
+                "  exit codes rendered from the committed usage spec."
+            )
+    elif cli:
         bullets.append(
             "- **[CLI reference](references/cli/)** — commands, flags and exit codes\n"
             "  rendered from the committed usage specs."
@@ -134,7 +144,7 @@ def _bin_recipe(name: str, info: dict[str, str]) -> str:
     hand = (
         f"### `{name}` — committed spec\n\n"
         f"`cli/{name}.usage.kdl` is the hand-authored contract; run "
-        "`usage lint cli/{name}.usage.kdl` after edits."
+        f"`usage lint cli/{name}.usage.kdl` after edits."
     )
     if recipe == "unknown":
         hand += " (no framework detected - keep the spec fully hand-written)"

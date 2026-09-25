@@ -6,3 +6,7 @@ __pycache__/
 *.py[oc]
 .pytest_cache/
 dist/
+site/
+.cache/
+.docs-kit/
+mise.local.toml

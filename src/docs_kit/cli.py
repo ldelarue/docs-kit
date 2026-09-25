@@ -16,7 +16,6 @@ standard page and the index; drift is gated by `docs:check` as usual.
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
@@ -26,6 +25,9 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from typing import Annotated, NoReturn
+
+import typer
 
 from . import __version__, render
 from .generator import generate_endpoints_page
@@ -306,7 +308,9 @@ def _scaffold_files(
     files: list[tuple[Path, str]] = [
         (
             root / "docs" / "index.md",
-            render.render_index_page(title, description, api=api, cli=bool(bins)),
+            render.render_index_page(
+                title, description, api=api, cli=bool(bins), bins=bins
+            ),
         ),
         (
             root / "docs" / "tutorials" / "index.md",
@@ -826,115 +830,187 @@ def _next_steps(
     return steps
 
 
+# ---------------------------------------------------------------------------
+# The interface contract. cli/docs-kit.usage.kdl is GENERATED from this
+# metadata by `mise run cli:spec` (shared/mise/usage-spec.py plus the
+# usage-spec-typer package) - help strings here ARE the docs, edit the code,
+# never the committed KDL (docs/references/cli-standard.md).
+
+ROOT_HELP = "target repo (default: cwd)"
+SPEC_HELP = (
+    "OpenAPI spec file relative to root (default: openapi.json when present; "
+    "the API pipeline is skipped when it is not)"
+)
+BIN_HELP = (
+    "name a CLI binary explicitly (repeatable); otherwise CLIs are detected "
+    "from cli/*.usage.kdl, typer console scripts, or go.mod+cobra"
+)
+NO_API_HELP = "never run the OpenAPI pipeline, even when openapi.json is present"
+NO_CLI_HELP = "never run the CLI-reference pipeline, even when CLI evidence is present"
+
+app = typer.Typer(help=__doc__, add_completion=False)
+
+
+def _show_version(value: bool) -> None:
+    if value:
+        typer.echo(f"docs-kit {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _root(
+    # NOT named "version": usage-spec-typer takes the default of any
+    # version-named root param as the contract's version node (bool False
+    # would render as "Version: False" on the page); the flag stays --version
+    show_version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            help="show program's version number and exit",
+            callback=_show_version,
+            is_eager=True,
+        ),
+    ] = False,
+) -> None:
+    pass
+
+
+@app.command()
+def init(
+    root: Annotated[str, typer.Argument(help=ROOT_HELP)] = ".",
+    spec: Annotated[str | None, typer.Option(help=SPEC_HELP)] = None,
+    bin: Annotated[list[str] | None, typer.Option(help=BIN_HELP)] = None,
+    no_api: Annotated[bool, typer.Option("--no-api/--api", help=NO_API_HELP)] = False,
+    no_cli: Annotated[bool, typer.Option("--no-cli/--cli", help=NO_CLI_HELP)] = False,
+    force: Annotated[
+        bool, typer.Option("--force/--no-force", help="overwrite scaffold files")
+    ] = False,
+    with_mise: Annotated[
+        bool,
+        typer.Option(
+            "--with-mise/--no-with-mise",
+            help="add mise integration (pulls the .docs-kit task layer, "
+            "wires the docs:* tasks)",
+        ),
+    ] = False,
+    docs_kit: Annotated[
+        str | None,
+        typer.Option(
+            help="path recorded as vars.docs_kit (default: $DOCS_KIT or "
+            "the .docs-kit shim; pass a clone path for checkout mode)"
+        ),
+    ] = None,
+) -> NoReturn:
+    """scaffold a Zensical docs site in a repo"""
+    raise typer.Exit(
+        cmd_init(
+            Path(root).resolve(),
+            spec or API_SPEC_DEFAULT,
+            force,
+            docs_kit or _default_kit_home(),
+            use_mise=with_mise,
+            spec_explicit=spec is not None,
+            extra_bins=list(bin or []),
+            no_api=no_api,
+            no_cli=no_cli,
+        )
+    )
+
+
+@app.command()
+def refresh(
+    root: Annotated[str, typer.Argument(help=ROOT_HELP)] = ".",
+    spec: Annotated[str | None, typer.Option(help=SPEC_HELP)] = None,
+    bin: Annotated[list[str] | None, typer.Option(help=BIN_HELP)] = None,
+    no_api: Annotated[bool, typer.Option("--no-api/--api", help=NO_API_HELP)] = False,
+    no_cli: Annotated[bool, typer.Option("--no-cli/--cli", help=NO_CLI_HELP)] = False,
+) -> NoReturn:
+    """regenerate all generated docs files"""
+    raise typer.Exit(
+        cmd_refresh(
+            Path(root).resolve(),
+            spec or API_SPEC_DEFAULT,
+            spec_explicit=spec is not None,
+            extra_bins=list(bin or []),
+            no_api=no_api,
+            no_cli=no_cli,
+        )
+    )
+
+
+@app.command()
+def check(
+    root: Annotated[str, typer.Argument(help=ROOT_HELP)] = ".",
+    spec: Annotated[str | None, typer.Option(help=SPEC_HELP)] = None,
+    bin: Annotated[list[str] | None, typer.Option(help=BIN_HELP)] = None,
+    no_api: Annotated[bool, typer.Option("--no-api/--api", help=NO_API_HELP)] = False,
+    no_cli: Annotated[bool, typer.Option("--no-cli/--cli", help=NO_CLI_HELP)] = False,
+) -> NoReturn:
+    """fail if generated docs files are stale"""
+    raise typer.Exit(
+        cmd_check(
+            Path(root).resolve(),
+            spec or API_SPEC_DEFAULT,
+            spec_explicit=spec is not None,
+            extra_bins=list(bin or []),
+            no_api=no_api,
+            no_cli=no_cli,
+        )
+    )
+
+
+@app.command("pull-tasks")
+def pull_tasks_cmd(
+    root: Annotated[str, typer.Argument(help=ROOT_HELP)] = ".",
+) -> NoReturn:
+    """pin the .docs-kit task layer to this CLI's version"""
+    raise typer.Exit(cmd_pull_tasks(Path(root).resolve(), _default_kit_home()))
+
+
+@app.command()
+def serve(
+    root: Annotated[str, typer.Argument(help=ROOT_HELP)] = ".",
+    port: Annotated[
+        int | None,
+        typer.Option(
+            help="exact port to bind (default: $DOCS_PORT, else prefer 8010, "
+            "then first free port in $FREE_PORT_MIN-$FREE_PORT_MAX)"
+        ),
+    ] = None,
+    host: Annotated[
+        str, typer.Option(help="bind address (default: 127.0.0.1)")
+    ] = "127.0.0.1",
+) -> NoReturn:
+    """serve the docs with live reload (Zensical)"""
+    raise typer.Exit(cmd_serve(Path(root).resolve(), port, host))
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="docs-kit", description=__doc__)
-    parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {__version__}"
-    )
-    sub = parser.add_subparsers(dest="command", required=True)
+    """Console entry: run the Typer app; the return value is the exit code.
 
-    def common(p: argparse.ArgumentParser) -> None:
-        p.add_argument(
-            "root", nargs="?", default=".", help="target repo (default: cwd)"
-        )
-        p.add_argument(
-            "--spec",
-            default=None,
-            help=f"OpenAPI spec file relative to root (default: {API_SPEC_DEFAULT} "
-            "when present; the API pipeline is skipped when it is not)",
-        )
-        p.add_argument(
-            "--bin",
-            action="append",
-            default=[],
-            metavar="NAME",
-            help="name a CLI binary explicitly (repeatable); otherwise CLIs are "
-            "detected from cli/*.usage.kdl, typer console scripts, or go.mod+cobra",
-        )
-        p.add_argument(
-            "--no-api",
-            action="store_true",
-            help="never run the OpenAPI pipeline, even when openapi.json is present",
-        )
-        p.add_argument(
-            "--no-cli",
-            action="store_true",
-            help="never run the CLI-reference pipeline, even when CLI evidence is present",
-        )
-
-    p_init = sub.add_parser("init", help="scaffold a Zensical docs site in a repo")
-    common(p_init)
-    p_init.add_argument("--force", action="store_true", help="overwrite scaffold files")
-    p_init.add_argument(
-        "--with-mise",
-        action="store_true",
-        help="add mise integration (pulls the .docs-kit task layer, wires the docs:* tasks)",
-    )
-    p_init.add_argument(
-        "--docs-kit",
-        default=_default_kit_home(),
-        help="path recorded as vars.docs_kit (default: $DOCS_KIT or the .docs-kit shim; pass a clone path for checkout mode)",
-    )
-    p_refresh = sub.add_parser("refresh", help="regenerate all generated docs files")
-    common(p_refresh)
-    p_check = sub.add_parser("check", help="fail if generated docs files are stale")
-    common(p_check)
-    p_pull = sub.add_parser(
-        "pull-tasks", help="pin the .docs-kit task layer to this CLI's version"
-    )
-    p_pull.add_argument(
-        "root", nargs="?", default=".", help="target repo (default: cwd)"
-    )
-    p_serve = sub.add_parser("serve", help="serve the docs with live reload (Zensical)")
-    p_serve.add_argument(
-        "root", nargs="?", default=".", help="target repo (default: cwd)"
-    )
-    p_serve.add_argument(
-        "--port",
-        type=int,
-        default=None,
-        help="exact port to bind (default: $DOCS_PORT, else prefer 8010, then first free "
-        "port in $FREE_PORT_MIN-$FREE_PORT_MAX)",
-    )
-    p_serve.add_argument(
-        "--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)"
-    )
-
-    args = parser.parse_args(argv)
-    root = Path(args.root).resolve()
-    if args.command == "init":
-        return cmd_init(
-            root,
-            args.spec or API_SPEC_DEFAULT,
-            args.force,
-            args.docs_kit,
-            use_mise=args.with_mise,
-            spec_explicit=args.spec is not None,
-            extra_bins=args.bin,
-            no_api=args.no_api,
-            no_cli=args.no_cli,
-        )
-    if args.command == "serve":
-        return cmd_serve(root, args.port, args.host)
-    if args.command == "refresh":
-        return cmd_refresh(
-            root,
-            args.spec or API_SPEC_DEFAULT,
-            spec_explicit=args.spec is not None,
-            extra_bins=args.bin,
-            no_api=args.no_api,
-            no_cli=args.no_cli,
-        )
-    if args.command == "pull-tasks":
-        return cmd_pull_tasks(root, _default_kit_home())
-    return cmd_check(
-        root,
-        args.spec or API_SPEC_DEFAULT,
-        spec_explicit=args.spec is not None,
-        extra_bins=args.bin,
-        no_api=args.no_api,
-        no_cli=args.no_cli,
-    )
+    cmd_* keep raising SystemExit directly for hard errors (message on
+    stderr, code 1); typer.Exit carries per-command codes (0 included);
+    click UsageError-style failures (no/unknown subcommand, bad values)
+    print usage and exit 2 like the old argparse front end. typer vendors
+    its click fork, so those are caught by their public attributes, not by
+    an isinstance against the separately installed click.
+    """
+    try:
+        app(args=argv, prog_name="docs-kit", standalone_mode=False)
+    except typer.Exit as exc:  # per-command exit code, --version included
+        return int(exc.exit_code)
+    except typer.Abort:  # Ctrl-C during a prompt
+        sys.exit(130)
+    except SystemExit:  # cmd_* hard errors keep their own code/message
+        raise
+    except Exception as exc:  # click UsageError family (vendored): show + exit
+        show = getattr(exc, "show", None)
+        code = getattr(exc, "exit_code", None)
+        if callable(show) and isinstance(code, int) and not isinstance(code, bool):
+            show()
+            sys.exit(code)
+        raise
+    return 0
 
 
 if __name__ == "__main__":

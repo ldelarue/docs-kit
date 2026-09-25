@@ -1,12 +1,12 @@
 [project]
 name = "docs-kit"
 version = "0.3.0"
-description = "Scaffold and regenerate a Zensical API documentation site from an OpenAPI spec (stdlib only)."
+description = "Scaffold and regenerate a Zensical docs site from an OpenAPI spec and/or CLI usage contracts."
 readme = "README.md"
 license = "CC-BY-4.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["typer>=0.27.0"]
 
 [project.scripts]
 docs-kit = "docs_kit.cli:main"
@@ -14,9 +14,9 @@ docs-kit = "docs_kit.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
-    # for tests/test_usage_spec.py: the helper runs in the *consumer's* venv,
-    # docs-kit itself stays stdlib; tests exercise the shapes these produce
-    "typer>=0.27.0",
+    # for tests/test_usage_spec.py and the cli:spec task: the helper imports
+    # the Typer app through the consumer's venv; docs-kit's own typer app is
+    # introspected by the same package that consumers use (cli-standard recipe 1)
     "usage-spec-typer>=1.2.1",
 ]
 

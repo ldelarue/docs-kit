@@ -6,7 +6,7 @@ Auto-generates API documentation from `openapi.json` and CLI reference docs from
 ## Install
 
 ```bash
-uv tool install --from "docs-kit @ git+ssh://git@github.com/ldelarue/docs-kit.git@latest" docs-kit
+uv tool install --from "docs-kit @ git+https://github.com/ldelarue/docs-kit.git@latest" docs-kit
 ```
 
 ## Quick Start
@@ -19,7 +19,7 @@ docs-kit serve     # preview at http://127.0.0.1:8010
 
 **Optional**: Wire to mise with `docs-kit init --with-mise`
 
-CI setup: add `DOCS_KIT_PAT` secret (contents: read on ldelarue/docs-kit) and set Pages source to GitHub Actions. The workflow file is only scaffolded when GitHub is detected (GitHub remote or CI env); Stash-hosted repos get the same `mise run docs:check` gate without it.
+CI setup: on your repo, set Pages source to GitHub Actions - nothing else. The generated `docs.yml` clones this public kit with the default `GITHUB_TOKEN` (no secrets, so fork PRs work too). The workflow file is only scaffolded when GitHub is detected (GitHub remote or CI env); Stash-hosted repos get the same `mise run docs:check` gate without it.
 
 ## CLI
 
@@ -50,6 +50,12 @@ mise run docs:pull-tasks   re-pin .docs-kit/ (shared/mise) to the installed CLI'
 
 `docs:refresh` runs your repo's `openapi` and `cli:spec` tasks only when they
 exist, then regenerates pages; `docs:check` fails on any resulting `git diff`.
+
+To fail drift at commit time too, wire `mise run docs:check` into your own
+git-hook runner: in [hk](https://hk.jdx.dev), a `pre-commit`-only step
+path-gated to your docs sources does it (the worked recipe is this repo's
+`hk.pkl` `docs-drift` step). Hooks are per-clone opt-in; the CI `check` job
+stays the non-bypassable gate.
 
 ## CLI reference docs (the standard)
 

@@ -152,8 +152,10 @@ artifact: never edit it, `rm -rf` restores it.
 
 **Consumer repositories** get `.github/workflows/docs.yml` as a GENERATED
 kit-owned file: `refresh` rewrites it and `check` fails on any drift, so the
-workflow can never silently age. Both jobs check the kit out tag-pinned with
-a one-time read-only `DOCS_KIT_PAT` secret and recreate the three gitignored
+workflow can never silently age. Both jobs check the kit out tag-pinned -
+`ldelarue/docs-kit` is public, so the default `GITHUB_TOKEN` (the
+actions/checkout fallback) reads that clone: no secret to set, and fork PRs
+work since none is needed - and recreate the three gitignored
 `mise.local.toml` opt-in keys before mise-action runs (`docs_kit` is the
 absolute checkout path under the workspace; committing the same keys to
 `.mise.toml` is a harmless duplicate). The `ref: v` stamp is the version of
@@ -179,6 +181,25 @@ push, the release) never fire other workflows - a called workflow sees the
 release regardless of token, so no PAT is required. The merge run is the real
 gate: nothing reaches a tag until a human merges the release PR.
 
+**Self-hosted docs**: this repo is its own consumer - `docs/` + `zensical.toml`
+are init-scaffolded (owned thereafter), `cli/docs-kit.usage.kdl` is generated
+from the Typer app by `mise run cli:spec` (the help strings in
+`src/docs_kit/cli.py` ARE the docs - never hand-edit the KDL; `usage lint`
+and `docs:check` enforce that), and the generated
+`.github/workflows/docs.yml` deploys
+`site/` to `https://ldelarue.github.io/docs-kit/`. It deploys on every
+push to main and additionally when a release is created, via bump's
+`deploy-docs` job calling the workflow (`workflow_call`; same
+GITHUB_TOKEN-can't-fire-`on: release` reason as publish, and the caller
+carries the `pages`/`id-token` ceiling) - so a release merge cuts two
+deployments the workflow's `concurrency` group mostly serializes
+(worst case: re-run docs once). Transitional note: until the tag that ships
+the conditional `shared/mise` bodies exists, the check job of the **first**
+PR adding docs.yml runs the v0.3.0 layer's bodies and fails on `mise run
+openapi` (no such task here); local iteration uses checkout mode meanwhile
+(see Development). After that tag, the pin-restamp step below applies to
+every release.
+
 ## Development
 
 ```bash
@@ -198,6 +219,31 @@ uv run --no-project --with dist/docs_kit-*.whl docs-kit --version   # one-shot, 
 fixes staged files (unstaged work stashed and restored), `hk check --all` is
 what CI re-runs, and `mise run lint` is the same command locally. Tools come
 from mise, not from the hook.
+
+The hook also carries the **docs drift gate** (`docs-drift`): an explicit
+`hooks["pre-commit"]` block re-declares `fix`/`stage`/`stash` so ruff and
+shellcheck keep their fix-on-commit behavior; `docs-drift` itself is
+pre-commit-only, never in the `check` hook the CI lint job runs there (CI's
+docs gate is docs.yml's `check` job, which the hook is a strict subset of).
+It is path-gated: it only runs when a **staged** path matches docs-related
+sources (`docs/`, `src/`, `cli/`, `shared/`, `pyproject.toml`, `zensical.toml`,
+`.github/workflows/`), so CHANGELOG- or tests-only commits skip it. It is
+check-only on purpose: drift **blocks** the commit and prints the refresh
+hint; the hook never silently stages regenerated docs - run
+`mise run docs:refresh`, `git add` the result, commit again. Two identity
+notes: `mise run docs:check` executes the docs-kit on **PATH** (the wheel
+from `install-local`), not the working tree - run `mise run install-local`
+after editing `src/docs_kit/**` so hook/CI CLI identity converges; and
+`shared/mise/**` edits only surface in consumer pulls and in this repo's CI
+at a **release tag** (CI checks out the pinned layer). Hooks are per-clone
+opt-in - run `mise run hooks` once per clone, after `docs-kit init
+--with-mise` - merge commits and `--no-verify` bypass them by design, the
+docs.yml `check` job is the non-bypassable line.
+
+This repo's own `mise.local.toml` (git-ignored) currently sets `docs_kit` to
+the clone path (checkout mode) because the released `.docs-kit` layer at
+v0.3.0 predates the conditional task bodies; switch it back to `.docs-kit`
+and run `docs-kit pull-tasks` once a tag ships the current `shared/mise`.
 
 The local wheel is accepted by every install method in the README (build
 locally, install locally, nothing pushed). Keep `shared/mise/kit-sync` and
@@ -239,6 +285,15 @@ and the git plumbing itself is covered against a local `file://` mirror via
    `latest` branch onto the tagged sha - so `latest` never points at a
    release without its assets. Re-run Publish manually (pass the tag, leave
    `move_latest_to` empty) to re-attach assets to an existing release.
+5. Restamp this repo's own docs pin: the committed `docs.yml` `ref:` pins
+   name the CLI version that rendered them and the tag must exist, so they
+   lag one release by design. Upgrade the local CLI (`uv tool upgrade
+   docs-kit` or `mise run install-local` on the new tag), run
+   `mise run docs:pull-tasks` (or `docs-kit pull-tasks`) and
+   `mise run docs:refresh`, and commit
+   the restamp (a local `mise run docs:check` flags the stale stamp until
+   it lands). Deploys between release and restamp keep the previous tag -
+   safe, content renders per commit.
 
 Dogfood check after release (playground testbed): in `~/Dev/me/golang-api-playground`,
 remove any generated docs-kit block from its `.mise.toml`, re-run

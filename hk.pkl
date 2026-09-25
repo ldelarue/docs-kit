@@ -12,3 +12,31 @@ steps {
   }
   ["shellcheck"] = Builtins.shellcheck
 }
+
+// The docs drift gate lives in the hook ONLY (never in hk check / hk check
+// --all: the CI lint job has no mise.local.toml/.docs-kit and its docs gate
+// is docs.yml's own check job). No top-level steps share the name, so the
+// explicit hook keeps its fix/stage/stash settings for ruff+shellcheck while
+// top-level steps still supply them here - docs-drift is pre-commit-only.
+//
+// check-only on purpose: drift BLOCKS the commit; the hook never silently
+// stages regenerated docs. Fix with `mise run docs:refresh`, git add, commit.
+// glob = skip unless a STAGED path matches (CHANGELOG/tests-only commits skip
+// it; docs/** is in because the generated pages are themselves drift targets).
+// IDENTITY: `mise run docs:check` runs the docs-kit on PATH (uv-tool wheel),
+// NOT this working tree - after editing src/docs_kit/** run `mise run
+// install-local` to converge (final convergence is the post-release restamp;
+// same caveat for shared/mise edits, which consumers see at release tags).
+hooks {
+  ["pre-commit"] {
+    fix = true
+    stage = true
+    stash = "git"
+    steps {
+      ["docs-drift"] {
+        glob = List("docs/**", "src/**", "cli/**", "shared/**", "pyproject.toml", "zensical.toml", ".github/workflows/**")
+        check = "mise run docs:check"
+      }
+    }
+  }
+}

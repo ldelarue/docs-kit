@@ -5,4 +5,4 @@ Doc generation is pure file I/O; the sole exception is the task-layer sync
 to pin the shared/mise payload at this package's version tag.
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"

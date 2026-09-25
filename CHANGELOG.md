@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/ldelarue/docs-kit/compare/v0.4.0...v0.4.1) (2026-09-25)
+
+
+### Bug Fixes
+
+* POSIX-sh task bodies; dash rejects ${var/pat} at runtime ([de82027](https://github.com/ldelarue/docs-kit/commit/de82027767d5ee4da5b590ac27a63b20823aae34))
+
 ## [0.4.0](https://github.com/ldelarue/docs-kit/compare/v0.3.0...v0.4.0) (2026-09-25)
 
 

@@ -706,13 +706,15 @@ def cmd_init(
     api, bins = detect_pipelines(
         root, spec_name, spec_explicit, extra_bins or [], no_api=no_api, no_cli=no_cli
     )
-    github = _github_detected(root)
-    if not api and not bins and not github:
+    # a GitHub-flavored environment is not a documentation source: without
+    # anything real to render, init refuses everywhere (also in CI/Actions)
+    if not api and not bins:
         sys.exit(
             "ERROR: no documentation source detected: no openapi.json, and no CLI "
             "evidence (cli/<bin>.usage.kdl, a typer console-script in pyproject.toml, "
             "or spf13/cobra in go.mod); name a CLI with --bin BIN, or pass --spec."
         )
+    github = _github_detected(root)
     detected = ", ".join(
         ([f"API ({spec_name})"] if api else [])
         + sorted(bins)

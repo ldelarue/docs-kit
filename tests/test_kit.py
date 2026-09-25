@@ -650,10 +650,13 @@ def test_init_both_pipelines_scaffolds_everything(tmp_path):
     assert "references/endpoints.md" in zens and "references/cli/mytool.md" in zens
 
 
-def test_init_neither_pipeline_refuses(tmp_path):
+def test_init_neither_pipeline_refuses(tmp_path, monkeypatch):
     repo = tmp_path / "empty"
     repo.mkdir()
     (repo / "README.md").write_text("# nothing to document\n")
+    # an Actions-like environment must not masquerade as a documentation
+    # source: runners set GITHUB_REPOSITORY, and init has to refuse there too
+    monkeypatch.setenv("GITHUB_REPOSITORY", "octo/empty-repo")
     with pytest.raises(SystemExit) as exc:
         cli.cmd_init(repo, SPEC, False, ".docs-kit")
     assert "no documentation source detected" in str(exc.value)

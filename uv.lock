@@ -84,7 +84,7 @@ wheels = [
 
 [[package]]
 name = "docs-kit"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "." }
 dependencies = [
     { name = "typer" },

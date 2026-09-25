@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -692,3 +693,41 @@ def test_github_detected_via_git_config(tmp_path, monkeypatch):
     )
     assert cli.cmd_refresh(repo, SPEC) == 0
     assert not (repo / cli.WORKFLOW).exists()  # never written, never removed
+
+
+BASH_ONLY_EXPANSIONS = [
+    # ${var/pat/rep} and ${var//pat/rep} - bash/zsh; dash and POSIX sh fail
+    # with "Bad substitution" AT RUNTIME (-n does not catch them).
+    re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(/[^}]*)?\}"),
+    # ${var:offset:length} - bash substring; POSIX ${var:-x}/${var:+y}/... ok
+    re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*:[^}=\-+?]"),
+]
+
+
+def test_shared_mise_bodies_are_posix():
+    """The mise task layer of consumers runs under their /bin/sh - on Ubuntu
+    that is dash. Nothing else lints these TOML bodies (shellcheck does not
+    read TOML), and dash only rejects ${var/pat/rep} at runtime, so gate both
+    statically here and parse-check with dash when it exists."""
+    tasks = tomllib.loads((KIT / "shared/mise/docs.toml").read_text(encoding="utf-8"))
+    bodies = {
+        name: spec["run"]
+        for name, spec in tasks.items()
+        if isinstance(spec, dict) and isinstance(spec.get("run"), str)
+    }
+    assert bodies
+    for name, body in bodies.items():
+        for pattern in BASH_ONLY_EXPANSIONS:
+            match = pattern.search(body)
+            assert match is None, f"{name}: bash-only expansion {match.group(0)}"
+        dash = shutil.which("dash")
+        if dash:
+            result = subprocess.run(
+                [dash, "-n", "-c", body],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert result.returncode == 0, (
+                f"{name}: dash parse: {result.stderr.strip()}"
+            )

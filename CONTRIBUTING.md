@@ -193,12 +193,12 @@ push to main and additionally when a release is created, via bump's
 GITHUB_TOKEN-can't-fire-`on: release` reason as publish, and the caller
 carries the `pages`/`id-token` ceiling) - so a release merge cuts two
 deployments the workflow's `concurrency` group mostly serializes
-(worst case: re-run docs once). Transitional note: until the tag that ships
-the conditional `shared/mise` bodies exists, the check job of the **first**
-PR adding docs.yml runs the v0.3.0 layer's bodies and fails on `mise run
-openapi` (no such task here); local iteration uses checkout mode meanwhile
-(see Development). After that tag, the pin-restamp step below applies to
-every release.
+(worst case: re-run docs once). The `ref:` in the committed docs.yml always
+lags one release: CI runs the task bodies of the tag it names, so a `shared/mise`
+fix only takes effect once released **and** restamped (Release step 5). Bodies
+must stay POSIX `sh` - consumers on dash would otherwise fail at runtime, and
+`shellcheck` never reads TOML, so the gate is
+`tests/test_kit.py::test_shared_mise_bodies_are_posix`.
 
 ## Development
 
@@ -240,10 +240,11 @@ opt-in - run `mise run hooks` once per clone, after `docs-kit init
 --with-mise` - merge commits and `--no-verify` bypass them by design, the
 docs.yml `check` job is the non-bypassable line.
 
-This repo's own `mise.local.toml` (git-ignored) currently sets `docs_kit` to
-the clone path (checkout mode) because the released `.docs-kit` layer at
-v0.3.0 predates the conditional task bodies; switch it back to `.docs-kit`
-and run `docs-kit pull-tasks` once a tag ships the current `shared/mise`.
+This repo's own `mise.local.toml` (git-ignored) uses checkout mode - `docs_kit`
+points at the working tree - so local `docs:*` runs exercise the `shared/mise`
+bodies being edited, not the tag CI will check out. That is what makes a
+dash-breaking body pass locally and fail on the runner: the tag lags, and
+`mise` on macOS is bash-backed.
 
 The local wheel is accepted by every install method in the README (build
 locally, install locally, nothing pushed). Keep `shared/mise/kit-sync` and

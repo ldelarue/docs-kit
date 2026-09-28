@@ -43,9 +43,6 @@ jobs:
       - name: pytest
         run: uv run pytest
 
-      - name: lease-port self-tests (shellcheck + port behavior)
-        run: sh tests/test_lease_port.sh
-
   package:
     runs-on: ubuntu-latest
     steps:

@@ -4,10 +4,11 @@ Everything the [README](README.md) deliberately leaves out: design guarantees, t
 
 ## Guarantees
 
-- **Stdlib-only Python; file I/O only for doc generation.** Spec export
+- **File I/O only for doc generation.** Runtime deps are `typer` and
+  `usage-spec-typer` (the exporter `docs-kit spec` imports). Spec export
   (`go run` / `uv run <api> -spec …`) stays the consuming repository's job.
-  The sole subprocesses in the package are the task-layer syncs (`pull-tasks`,
-  and `init`'s best-effort shim update), which shell out to `git`.
+  Subprocesses: `git` (task-layer syncs), `usage` (lint + render CLI pages),
+  and Zensical (`serve`).
 - **Idempotent and byte-stable**: `refresh` rewrites the whole generated set;
   ordering is sort-stable, runs are byte-equal when nothing changed, and
   semantically-equal specs render identical pages.
@@ -30,11 +31,9 @@ Everything the [README](README.md) deliberately leaves out: design guarantees, t
   refused). Anything else - stale or hand-edited docs-kit keys, unparseable
   merges - leaves the file byte-for-byte untouched and only gets the printed
   copy-paste/merge hint; pasting is then the user's explicit choice.
-  `.mise.toml` is **never written**; legacy
-  lines from old inits inside `.mise.toml` are quoted in a red cleanup note,
-  never rewritten. mise integration is opt-in: without `--with-mise`, none of
-  this happens (no task-layer pull, no keys anywhere; docs scaffold only,
-  existing files left alone).
+  `.mise.toml` is **never written**. mise integration is opt-in: without
+  `--with-mise`, none of this happens (no task-layer pull, no keys anywhere;
+  docs scaffold only, existing files left alone).
 
 ## Pinning model
 
@@ -78,9 +77,8 @@ are explicit (`--docs-kit /path/to/docs-kit` or the env).
   `mise run docs:pull-tasks` once any layer exists) retries.
   `DOCS_KIT_SKIP_PULL=1` skips the sync too (used by tests).
 - **Checkout install (absolute path, explicit `--docs-kit`)**: nothing is
-  fetched - the tasks resolve straight from the full clone (which also
-  carries `shared/scripts/`); `git pull` in the clone is the deliberate,
-  reviewable upgrade.
+  fetched - the tasks resolve straight from the full clone; `git pull` in the
+  clone is the deliberate, reviewable upgrade.
 
 `.docs-kit/` stores the pulled layer **only** - no block template lives
 there; the block exists just once, as the comment-free string in the CLI,
@@ -120,10 +118,10 @@ by path and re-read on every `mise run`. The Python package knows its
 version, and the layer must follow it. `docs:pull-tasks` lives *in* the
 shared `docs.toml` (guard: an absolute `$DOCS_KIT` means a checkout install
 -> "nothing to pull", exit 0; the shim path also honours a custom relative
-`docs_kit` value). Its body prefers the engine `shared/mise/kit-sync` (which
-is part of the pulled payload, so engine updates arrive by pulling the layer);
-the inline `git` fallback exists for layers published before the engine, and
-bootstrap before any payload exists. Both bootstrap **in place** with
+`docs_kit` value). Its body runs the engine `shared/mise/kit-sync`, which
+ships in the same payload as `docs.toml` (engine updates arrive by pulling
+the layer); `docs-kit pull-tasks` / `init` do the same in Python, which is
+also how the very first pull bootstraps. Both bootstrap **in place** with
 `git init` + `remote add` (`git clone` refuses non-empty directories, and a
 half-created shim dir must never block a retry). Before checkout, both
 paths `ls-tree` the target tag and **refuse tags that ship no
@@ -141,12 +139,8 @@ the `kit-sync` engine only exist from the release that ships the current
 bumping the CLI, run `mise run docs:pull-tasks` (or `docs-kit pull-tasks`
 when even the block is missing) or the tasks stay a version behind.
 
-`shared/mise` vs `shared/scripts`: the sparse pull contains only
-`shared/mise/`. Port leasing for `docs:serve` lives in the CLI itself
-(`docs-kit serve`), so shim and checkout installs behave identically;
-`shared/scripts/lease-port` is the standalone shell equivalent, kept for
-direct use and covered by its own self-test. `.docs-kit/` is a throwaway
-artifact: never edit it, `rm -rf` restores it.
+`.docs-kit/` is a throwaway artifact containing only `shared/mise/`
+(`docs.toml` + `kit-sync`): never edit it, `rm -rf` restores it.
 
 ## CI
 
@@ -167,8 +161,8 @@ intentionally ignores the floating `latest` branch, and a runner never
 depends on what is installed on a machine.
 
 **This repository**: `ci.yml` first runs `hk check --all` (the same steps as
-the pre-commit hook - see Development), then pytest plus the
-lease-port/shellcheck suite on PRs and main, and uploads the `docs-kit-dist`
+the pre-commit hook - see Development), then pytest on PRs and main, and
+uploads the `docs-kit-dist`
 wheel artifact. `bump.yml` runs on every push to main: release-please
 keeps one release PR open (opening or updating it as conventional commits
 accumulate), and on the run whose push merges that PR it tags `vX.Y.Z` and
@@ -209,7 +203,6 @@ mise run hooks           # hk install --mise -> .git/hooks/pre-commit (per clone
 mise run lint            # hk check --all: ruff format --diff, ruff check, shellcheck
 mise run fmt             # hk fix --all: apply ruff format + ruff --fix
 mise run test            # pytest (uv)
-mise run test-scripts    # shellcheck + lease-port scenarios (also checks shared/mise/kit-sync)
 mise run build           # dist/docs_kit-<ver>-py3-none-any.whl + .tar.gz
 mise run install-local   # build, then wheel -> docs-kit on PATH (uv tool, --force)
 uv run --no-project --with dist/docs_kit-*.whl docs-kit --version   # one-shot, no PATH change
@@ -248,7 +241,7 @@ dash-breaking body pass locally and fail on the runner: the tag lags, and
 
 The local wheel is accepted by every install method in the README (build
 locally, install locally, nothing pushed). Keep `shared/mise/kit-sync` and
-all task bodies POSIX `sh`; shellcheck is part of `test-scripts`, and task
+all task bodies POSIX `sh`; `hk check` shellchecks `kit-sync`, and task
 bodies live in **single-line TOML inline tables** (inline tables cannot span
 lines, and a literal string can't contain `'` - no `awk`/quoted patterns in
 `docs.toml` run bodies).

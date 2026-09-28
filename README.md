@@ -27,7 +27,7 @@ CLI installs also work as a tool: `uv tool install --from "docs-kit @ git+https:
 
 ```bash
 docs-kit init --with-mise   # pulls .docs-kit/shared/mise, wires mise.local.toml
-mise run docs:refresh       # same engine: docs.toml drives docs-kit + shared scripts
+mise run docs:refresh       # the pulled docs.toml tasks call the same docs-kit CLI
 docs-kit serve
 ```
 
@@ -42,6 +42,7 @@ docs-kit render [ROOT]
 docs-kit refresh [ROOT] [--spec openapi.json] [--bin NAME] [--no-api] [--no-cli]
 docs-kit check [ROOT] [--spec openapi.json] [--bin NAME] [--no-api] [--no-cli]
 docs-kit serve [ROOT] [--port N] [--host H]
+docs-kit build [ROOT]
 docs-kit pull-tasks [ROOT]
 docs-kit --version
 ```
@@ -92,8 +93,8 @@ contract that keeps CLI docs generated. In short:
   `docs:check` gate every change.
 
 After `uv tool upgrade docs-kit && docs-kit refresh` (tool installs), also
-re-pin the task layer with `docs-kit pull-tasks` so the shim payload scripts
-(usage-spec.py, render-cli-docs) match the CLI version. Dependency-mode repos
+re-pin the task layer with `docs-kit pull-tasks` so the shim's `docs:*` task
+bodies match the CLI version. Dependency-mode repos
 have no layer to re-pin: bump the dev-dep tag, then re-run `docs-kit init
 --with-mise --committed` when `docs-kit check` reports glue drift.
 

@@ -1,72 +1,15 @@
-"""Tests for docs_kit.usage_spec - the committed-KDL merge helper.
-
-The module is also the byte-source of shared/mise/usage-spec.py, the pulled
-payload that keeps the old `python $DOCS_KIT/shared/mise/usage-spec.py` task
-shape working for shim consumers - both shapes are gated here.
-"""
+"""Tests for docs_kit.usage_spec - the committed-KDL merge helper."""
 
 from __future__ import annotations
 
-import subprocess
-import sys
 import textwrap
 from enum import Enum
-from pathlib import Path
 from typing import Annotated
 
 import pytest
 import typer
 
 from docs_kit import usage_spec
-
-KIT = Path(__file__).resolve().parents[1]
-HELPER = KIT / "shared/mise/usage-spec.py"
-MODULE = KIT / "src/docs_kit/usage_spec.py"
-
-
-# --- the payload copy stays byte-identical to the module ---------------------
-
-
-def test_payload_is_byte_copy_of_module():
-    payload = HELPER.read_text(encoding="utf-8")
-    module_src = MODULE.read_text(encoding="utf-8")
-    head, _, tail = payload.partition(usage_spec.PAYLOAD_SENTINEL + "\n")
-    assert head.startswith("#!/usr/bin/env python3")
-    assert "GENERATED" in head
-    assert tail == module_src, (
-        "shared/mise/usage-spec.py drifted from the module - run "
-        "`python tools/sync-usage-spec-payload.py`"
-    )
-
-
-def test_payload_wrapper_runs_stand_alone(tmp_path):
-    """The old task shape (go path): plain python, stdlib only, no package."""
-    extra = tmp_path / "toy.usage.extra.kdl"
-    extra.write_text('exit_code 9 "nine"\n')
-    out = tmp_path / "cli/toy.usage.kdl"
-    core = 'name toy\nbin toy\nabout "t."\n'
-    proc = subprocess.run(
-        [
-            sys.executable,
-            str(HELPER),
-            "--kdl-stdin",
-            "--bin",
-            "toy",
-            "--extra",
-            str(extra),
-            "--out",
-            str(out),
-        ],
-        input=core,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert proc.returncode == 0, proc.stderr
-    text = out.read_text(encoding="utf-8")
-    assert text.startswith(usage_spec.BANNER)
-    assert 'exit_code 9 "nine"' in text
-
 
 # --- generated-core shapes (byte-exact fixtures from real typer_usage runs) ---
 
@@ -228,12 +171,44 @@ def test_multiline_triple_quoted_extra_node_survives_validation():
     assert "uv run stash-watcher --sort name" in merged
 
 
+def test_braces_inside_strings_do_not_move_block_borders():
+    core = TREE_CORE.replace('help="Do the thing."', 'help="Close with }."')
+    extra = textwrap.dedent(
+        '''\
+        cmd main {
+            long_help "Unbalanced { in a string"
+            example """
+        $ probe main --json
+        {
+          "ok": true
+        """ header="JSON output"
+            exit_code 0 "ok"
+        }
+        '''
+    )
+    merged = usage_spec.merge(core, extra)
+    lines = merged.split("\n")
+    main_close = next(
+        i
+        for i, ln in enumerate(lines)
+        if ln == "}" and i > next(j for j, x in enumerate(lines) if "cmd main" in x)
+    )
+    assert merged.index('exit_code 0 "ok"') < merged.index(lines[main_close + 1])
+    assert '"ok": true' in merged
+    assert merged.index("exit_code 0") < merged.index("cmd list")
+
+
+def test_one_line_extra_cmd_block_is_refused():
+    with pytest.raises(SystemExit, match="one line"):
+        usage_spec.merge(TREE_CORE, 'cmd main { exit_code 0 "x" }\n')
+
+
 def test_empty_core_fails():
     with pytest.raises(SystemExit, match="empty"):
         usage_spec.merge("// banner only\n", None)
 
 
-# --- end-to-end through --typer + --out (task shape) -------------------------
+# --- end-to-end through the Typer exporter -----------------------------------
 
 
 class _Sorter(str, Enum):
@@ -256,71 +231,15 @@ def probe_main(
     """Probe."""
 
 
-@pytest.fixture()
-def toy_app(monkeypatch):
-    usage_spec.load_app = lambda _spec: _app
-    return _app
-
-
-def test_main_writes_banner_and_merge(tmp_path, capsys, toy_app):
-    extra = tmp_path / "toy.usage.extra.kdl"
-    extra.write_text('exit_code 5 "boom"\n')
-    out = tmp_path / "cli/toy.usage.kdl"
-    rc = usage_spec.main(
-        [
-            "--typer",
-            "irrelevant:app",
-            "--bin",
-            "toy",
-            "--extra",
-            str(extra),
-            "--out",
-            str(out),
-        ]
-    )
-    assert rc == 0
-    text = out.read_text()
+def test_typer_export_renders_banner_and_merge():
+    extra = 'exit_code 5 "boom"\n'
+    text = usage_spec.render_text(usage_spec.typer_export(_app, "toy"), extra)
     assert text.startswith(usage_spec.BANNER + "\n")
     assert "exit_code 5" in text
     # var=#true and choices come through unchanged from the exporter
     assert "var=#true" in text
     assert "choices activity name" in text
-    # idempotent --out
-    capsys.readouterr()
-    assert (
-        usage_spec.main(
-            [
-                "--typer",
-                "irrelevant:app",
-                "--bin",
-                "toy",
-                "--extra",
-                str(extra),
-                "--out",
-                str(out),
-            ]
-        )
-        == 0
-    )
-    assert "unchanged" in capsys.readouterr().out
-
-
-def test_main_kdl_stdin_path(tmp_path, capsys):
-    core = tmp_path / "core.kdl"
-    core.write_text(FLAT_CORE)
-    out = tmp_path / "cli/stash-watcher.usage.kdl"
-    import io
-    import sys as _sys
-
-    real_stdin, _sys.stdin = _sys.stdin, io.StringIO(core.read_text(encoding="utf-8"))
-    try:
-        rc = usage_spec.main(
-            ["--kdl-stdin", "--bin", "stash-watcher", "--out", str(out)]
-        )
-    finally:
-        _sys.stdin = real_stdin
-    assert rc == 0
-    assert out.read_text().startswith(usage_spec.BANNER)
+    assert text == usage_spec.render_text(usage_spec.typer_export(_app, "toy"), extra)
 
 
 def test_multi_value_default_brackets_stripped():
@@ -330,7 +249,7 @@ def test_multi_value_default_brackets_stripped():
     assert "var=#true" in merged
 
 
-def test_missing_dependency_message(capsys):
+def test_missing_dependency_message():
     import builtins
 
     real_import = builtins.__import__
@@ -343,9 +262,7 @@ def test_missing_dependency_message(capsys):
     builtins.__import__ = _block_typer_usage
     try:
         with pytest.raises(SystemExit) as exc:
-            usage_spec.main(
-                ["--typer", "docs_kit:nothing", "--bin", "toy", "--out", "/tmp/never"]
-            )
+            usage_spec.typer_export(_app, "toy")
     finally:
         builtins.__import__ = real_import
     assert "usage-spec-typer" in str(exc.value)

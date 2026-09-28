@@ -6,6 +6,7 @@ import json
 from importlib.resources import files
 
 from . import __version__
+from .detect import Recipe
 
 _ASSETS = files("docs_kit") / "assets"
 
@@ -60,7 +61,6 @@ def render_index_page(
     title: str,
     description: str,
     api: bool = True,
-    cli: bool = False,
     bins: dict[str, dict[str, str]] | None = None,
 ) -> str:
     bullets = []
@@ -69,19 +69,14 @@ def render_index_page(
             "- **[API reference](references/api.md)** — interactive Swagger UI plus\n"
             "  generated endpoint tables."
         )
-    if bins:
-        # link the real pages (there is no page at the directory itself);
-        # same targets as the zensical nav gets
-        for name in sorted(bins):
-            label = "CLI reference" if len(bins) == 1 else f"`{name}` reference"
-            bullets.append(
-                f"- **[{label}](references/cli/{name}.md)** — commands, flags and\n"
-                "  exit codes rendered from the committed usage spec."
-            )
-    elif cli:
+    bins = bins or {}
+    # link the real pages (there is no page at the directory itself);
+    # same targets as the zensical nav gets
+    for name in sorted(bins):
+        label = "CLI reference" if len(bins) == 1 else f"`{name}` reference"
         bullets.append(
-            "- **[CLI reference](references/cli/)** — commands, flags and exit codes\n"
-            "  rendered from the committed usage specs."
+            f"- **[{label}](references/cli/{name}.md)** — commands, flags and\n"
+            "  exit codes rendered from the committed usage spec."
         )
     return _asset("index.md.tmpl").format(
         title=title,
@@ -102,7 +97,7 @@ def render_cli_standard_page(
         .replace(
             "@@BINS@@",
             "\n".join(
-                f"| `{name}` | {info.get('recipe', 'unknown')} | "
+                f"| `{name}` | {info.get('recipe', Recipe.UNKNOWN)} | "
                 f"{cli_page_dir}/{name}.md | cli/{name}.usage.kdl |"
                 for name, info in sorted(bins.items())
             ),
@@ -115,8 +110,8 @@ def render_cli_standard_page(
 
 
 def _bin_recipe(name: str, info: dict[str, str]) -> str:
-    recipe = info.get("recipe", "unknown")
-    if recipe == "python":
+    recipe = info.get("recipe", Recipe.UNKNOWN)
+    if recipe == Recipe.PYTHON:
         return (
             f"### `{name}` — Python / Typer (dependency mode)\n\n"
             "docs-kit (which carries the Typer→usage exporter) is a dev\n"
@@ -134,7 +129,7 @@ def _bin_recipe(name: str, info: dict[str, str]) -> str:
             "deviate. `docs-kit init --with-mise --committed` writes the canonical\n"
             "task block for you.\n".format(name=name)
         )
-    if recipe == "go":
+    if recipe == Recipe.GO:
         return (
             f"### `{name}` — Go / cobra\n\n"
             "Add the hidden `--usage-spec` flag (cobra_usage) in main.go, then:\n\n"
@@ -149,7 +144,7 @@ def _bin_recipe(name: str, info: dict[str, str]) -> str:
         f"`cli/{name}.usage.kdl` is the hand-authored contract; run "
         f"`usage lint cli/{name}.usage.kdl` after edits."
     )
-    if recipe == "unknown":
+    if recipe == Recipe.UNKNOWN:
         hand += " (no framework detected - keep the spec fully hand-written)"
     return hand
 

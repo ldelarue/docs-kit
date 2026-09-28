@@ -14,11 +14,6 @@ description = "Run the test suite"
 dir = "{{cwd}}"
 run = "uv run pytest"
 
-[tasks."test-scripts"]
-description = "Self-test shared/scripts: shellcheck + lease-port scenarios"
-dir = "{{cwd}}"
-run = "sh tests/test_lease_port.sh"
-
 [tasks.lint]
 description = "hk: check every file against hk.pkl (ruff fmt+check, shellcheck)"
 dir = "{{cwd}}"

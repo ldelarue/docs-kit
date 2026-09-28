@@ -6,7 +6,7 @@ Auto-generates API documentation from `openapi.json` and CLI reference docs from
 ## Quick Start (Python CLIs: docs-kit as a dev dependency)
 
 ```bash
-uv add --dev "docs-kit @ git+https://github.com/ldelarue/docs-kit.git@v0.5.0"   # once, committed
+uv add --dev "docs-kit @ git+https://github.com/ldelarue/docs-kit.git@latest"   # once, committed
 uv run docs-kit init --with-mise --committed   # scaffold + committed mise.toml task block
 mise install && uv sync                        # everything arrives: kit, exporter, usage tool
 mise run docs:refresh && mise run docs:serve

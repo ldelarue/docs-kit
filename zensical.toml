@@ -1,19 +1,35 @@
 [project]
 site_name = "docs-kit"
-site_description = ""
-# Required by instant navigation; replace with the real URL before publishing.
-site_url = "https://example.com"
+site_description = "Generated, drift-checked API and CLI reference docs for Zensical sites."
+site_url = "https://ldelarue.github.io/docs-kit/"
+repo_url = "https://github.com/ldelarue/docs-kit"
+repo_name = "ldelarue/docs-kit"
 
 # Diataxis structure: the top-level nav entries become header tabs
 # (navigation.tabs feature). API and CLI reference pages are GENERATED -- see
 # README / docs/references/cli-standard.md.
 nav = [
   { "Home" = "index.md" },
-  { "Tutorials" = ["tutorials/index.md"] },
-  { "Guides" = ["guides/index.md"] },
-  { "Explanation" = ["explanation/index.md"] },
+  { "Tutorials" = [
+    "tutorials/first-docs-site.md",
+  ] },
+  { "Guides" = [
+    "guides/install.md",
+    "guides/configure-mise-and-uv.md",
+    "guides/preview.md",
+    "guides/document-a-cli.md",
+    "guides/publish-an-api-reference.md",
+    "guides/gate-drift.md",
+    "guides/upgrade.md",
+  ] },
+  { "Explanation" = [
+    "explanation/generated-docs.md",
+    "explanation/install-modes.md",
+    "explanation/toolchain.md",
+  ] },
   { "References" = [
-    "references/index.md",
+    "references/repository-layout.md",
+    "references/mise-tasks.md",
     {"CLI" = ["references/cli/docs-kit.md", "references/cli-standard.md"]},
   ] },
 ]
@@ -21,6 +37,7 @@ nav = [
 [project.theme]
 language = "en"
 features = [
+  "content.code.annotate",
   "content.code.copy",
   "content.tabs.link",
   "navigation.footer",
@@ -39,9 +56,23 @@ media = "(prefers-color-scheme: dark)"
 scheme = "slate"
 
 [project.markdown_extensions]
-toc.permalink = true
+# Setting this table replaces Zensical's defaults, so every extension the
+# hand-written pages use (admonitions, grids, tabs, annotations, icons) is listed.
+abbr = {}
+admonition = {}
+attr_list = {}
+def_list = {}
 footnotes = {}
+md_in_html = {}
+toc.permalink = true
+pymdownx.details = {}
+pymdownx.emoji.emoji_index = "zensical.extensions.emoji.twemoji"
+pymdownx.emoji.emoji_generator = "zensical.extensions.emoji.to_svg"
+pymdownx.highlight = { anchor_linenums = true, line_spans = "__span", pygments_lang_class = true }
+pymdownx.inlinehilite = {}
+pymdownx.keys = {}
 pymdownx.superfences.custom_fences = [
   { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
 ]
-pymdownx.tabbed.alternate_style = true
+pymdownx.tabbed = { alternate_style = true, combine_header_slug = true }
+pymdownx.tasklist = { custom_checkbox = true }

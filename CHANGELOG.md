@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.1](https://github.com/ldelarue/docs-kit/compare/v0.5.0...v0.5.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* propagate command exit codes through cli.main() ([669fbb8](https://github.com/ldelarue/docs-kit/commit/669fbb86a0488abba1815ada5102736bff22c083))
+
+
+### Documentation
+
+* build out the Diátaxis site content ([74c3208](https://github.com/ldelarue/docs-kit/commit/74c320892ad962cb7b8a39dd5b3fb83687edffe9))
+
 ## [0.5.0](https://github.com/ldelarue/docs-kit/compare/v0.4.1...v0.5.0) (2026-09-28)
 
 

@@ -1,8 +1,8 @@
 [project]
 site_name = "docs-kit"
-site_description = "Docs sites from an OpenAPI spec and/or CLI contracts: scaffold, regenerate, verify, serve."
+site_description = ""
 # Required by instant navigation; replace with the real URL before publishing.
-site_url = "https://ldelarue.github.io/docs-kit/"
+site_url = "https://example.com"
 
 # Diataxis structure: the top-level nav entries become header tabs
 # (navigation.tabs feature). API and CLI reference pages are GENERATED -- see

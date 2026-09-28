@@ -14,11 +14,6 @@ description = "Run the test suite"
 dir = "{{cwd}}"
 run = "uv run pytest"
 
-[tasks."test-scripts"]
-description = "Self-test shared/scripts: shellcheck + lease-port scenarios"
-dir = "{{cwd}}"
-run = "sh tests/test_lease_port.sh"
-
 [tasks.lint]
 description = "hk: check every file against hk.pkl (ruff fmt+check, shellcheck)"
 dir = "{{cwd}}"
@@ -37,7 +32,7 @@ run = "hk install --mise"
 [tasks."cli:spec"]
 description = "Regenerate cli/docs-kit.usage.kdl from the Typer app"
 dir = "{{cwd}}"
-run = 'uv run python "$DOCS_KIT/shared/mise/usage-spec.py" --typer docs_kit.cli:app --bin docs-kit --extra cli/docs-kit.usage.extra.kdl --out cli/docs-kit.usage.kdl'
+run = "uv run docs-kit spec"
 
 [tasks.build]
 description = "Build wheel + sdist into dist/"

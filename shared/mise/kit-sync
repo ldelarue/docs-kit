@@ -4,10 +4,9 @@
 # with the INSTALLED CLI version, so the tasks in shared/mise/docs.toml can
 # never drift from the CLI build. This file is itself part of the pulled
 # payload, so consumers pick up engine updates by pulling the layer.
-# The target may already exist WITHOUT a checkout (docs-kit init writes
-# .docs-kit/mise.local.toml there before it can pull), so the bootstrap is
-# an in-place `git init` + `remote add` - `git clone` refuses non-empty
-# directories; the stray template is untracked and survives the checkout.
+# The target may already exist WITHOUT a checkout (a half-done pull), so the
+# bootstrap is an in-place `git init` + `remote add` - `git clone` refuses
+# non-empty directories.
 # Usage: sh kit-sync [SHIM_DIR] [VERSION]   defaults: .docs-kit, auto-detected.
 # Requires: git (SSH access to the kit repo, or point DOCS_KIT_REPO elsewhere),
 # and either a docs-kit binary on PATH or a uv project for the fallback probe

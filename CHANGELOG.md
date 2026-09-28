@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/ldelarue/docs-kit/compare/v0.4.1...v0.5.0) (2026-09-28)
+
+
+### Features
+
+* dependency mode - docs-kit as a consumer dev dependency ([#13](https://github.com/ldelarue/docs-kit/issues/13)) ([4dbaf10](https://github.com/ldelarue/docs-kit/commit/4dbaf1048fc25f7deb3cf1b7757fbc134c3e8d77))
+
 ## [0.4.1](https://github.com/ldelarue/docs-kit/compare/v0.4.0...v0.4.1) (2026-09-25)
 
 

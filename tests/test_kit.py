@@ -561,6 +561,14 @@ def test_build_runs_zensical_from_this_env(tmp_path, monkeypatch):
     assert calls == [[sys.executable, "-m", "zensical", "build", "--clean"]]
 
 
+def test_main_propagates_command_exit_codes(tmp_path, monkeypatch):
+    # a stale `check` (exit 1) must reach the console script, not just print
+    monkeypatch.setattr(
+        serve.subprocess, "run", lambda cmd, **kw: types.SimpleNamespace(returncode=3)
+    )
+    assert cli.main(["build", str(tmp_path)]) == 3
+
+
 # ---------------------------------------------------------------------------
 # autodetection: API / CLI / both / neither, the GitHub gate and [tools] usage
 

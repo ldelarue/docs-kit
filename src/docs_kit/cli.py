@@ -241,7 +241,8 @@ def main(argv: list[str] | None = None) -> int:
     exit 2. typer vendors its click fork, so those are matched by attributes.
     """
     try:
-        app(args=argv, prog_name="docs-kit", standalone_mode=False)
+        # non-standalone click RETURNS typer.Exit's code instead of raising it
+        rc = app(args=argv, prog_name="docs-kit", standalone_mode=False)
     except typer.Exit as exc:
         return int(exc.exit_code)
     except typer.Abort:
@@ -255,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
             show()
             sys.exit(code)
         raise
-    return 0
+    return rc if isinstance(rc, int) and not isinstance(rc, bool) else 0
 
 
 if __name__ == "__main__":

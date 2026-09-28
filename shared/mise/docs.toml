@@ -1,4 +1,10 @@
 # Shared mise tasks + shared/mise/ scripts, single-sourced from the docs-kit clone.
+# GLUE MODE SUPERSEDES THIS INCLUDE for Python repos: `docs-kit init --with-mise
+# --committed` writes a small block of [tools] usage + docs tasks straight into
+# the repo's committed mise.toml calling the docs-kit that lives in the repo's
+# own venv (spec/render/refresh/check happen inside the package) - no clone,
+# no $DOCS_KIT, no gitignored docs wiring. This file stays the way for
+# non-Python (Go) / no-venv consumers and for kit development itself.
 # Opt-in wiring (nothing is ever written into your .mise.toml): `docs-kit init`
 # creates a missing repo-local mise.local.toml (git-ignored, mise auto-loads
 # it) with the keys below; an existing one is never rewritten - init appends

@@ -1,10 +1,3 @@
-#!/usr/bin/env python3
-# GENERATED COPY (payload) of src/docs_kit/usage_spec.py - do not edit here.
-# The pulled .docs-kit layer ships only /shared/mise/, so this byte copy
-# is what makes the old `python $DOCS_KIT/shared/mise/usage-spec.py --...
-# task shape keep working for shim (no-venv-package) consumers. Edit the
-# module, then run: python tools/sync-usage-spec-payload.py
-# === docs-kit-usage-spec-payload (keep in sync) ===
 """usage-spec - regenerate a committed Usage KDL spec from a Typer app.
 
 Single source of the merge logic. Two other shapes stay in sync with it:

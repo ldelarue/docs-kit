@@ -1,17 +1,23 @@
-"""docs-kit command line: init / refresh / check / pull-tasks / serve.
+"""docs-kit command line: init / refresh / spec / render / check / pull-tasks / serve.
 
-Doc generation is pure file I/O; the only subprocesses anywhere are the
-task-layer syncs (init's best-effort shim update and `pull-tasks`), which
-shell out to git to keep the pinned shared/mise payload at this CLI's tag,
-and `serve`, which runs Zensical's live-reload server (PATH first, uvx else).
+Doc generation is pure file I/O; the subprocesses are the task-layer syncs
+(init's best-effort shim update and `pull-tasks`, which shell out to git),
+`serve` (Zensical), and `spec`/`render`: `spec` runs the Typer exporter that
+lives inside this package's venv (dependency mode puts docs-kit - and with it
+usage-spec-typer - in the CONSUMER's venv, so `uv run docs-kit spec` imports
+the repo's own app), and `render` calls the `usage` binary from PATH (pinned
+by the committed glue block's `[tools]` line).
 
 What a repository gets is autodetected at every command: an OpenAPI pipeline
 when `openapi.json` (or --spec) is there, a CLI-reference pipeline when CLI
 evidence is (`cli/*.usage.kdl`, a Typer app in pyproject, cobra in go.mod),
-both when both are. The CLI pipeline's pages are rendered by the task layer
-(`shared/mise/render-cli-docs` via mise, calling the `usage` binary);
-this CLI owns the scaffold those pages need: the Zensical nav, the CLI
-standard page and the index; drift is gated by `docs:check` as usual.
+both when both are. `docs-kit init --with-mise --committed` (dependency mode)
+writes the committed mise.toml task block; from then on `spec` (contracts),
+`render` (reference pages) and `refresh`/`check` (both, plus API pages) run
+entirely inside this CLI. Without --committed - and on shim/no-venv consumers
+ever - the task layer (`shared/mise/docs.toml` + the `.docs-kit` shim) drives
+these same commands and the shared render/usage-spec payload scripts. Drift
+is gated by `docs:check` as usual.
 """
 
 from __future__ import annotations
@@ -29,8 +35,9 @@ from typing import Annotated, NoReturn
 
 import typer
 
-from . import __version__, render
+from . import __version__, render, render_cli, usage_spec
 from .generator import generate_endpoints_page
+from .render_cli import CLI_DIR, KDL_EXTRA_SUFFIX, KDL_SUFFIX
 
 REGEN_CMD = "docs-kit refresh"
 
@@ -39,10 +46,6 @@ VENDORED_SPEC = "docs/reference/openapi.json"
 SWAGGER_PAGE = "docs/reference/swagger.html"
 API_PAGE = "docs/references/api.md"
 ENDPOINTS_PAGE = "docs/references/endpoints.md"
-CLI_DIR = "cli"
-KDL_SUFFIX = ".usage.kdl"
-KDL_EXTRA_SUFFIX = ".usage.extra.kdl"
-CLI_PAGE_DIR = "docs/references/cli"
 CLI_STANDARD_PAGE = "docs/references/cli-standard.md"
 
 ZENSONFIG = "zensical.toml"
@@ -260,7 +263,10 @@ def cmd_refresh(
                 DIM,
             )
         )
-    return 0
+    if bins:
+        _respec_committed(root, bins)
+    rc = render_cli.cmd_render(root)
+    return rc or 0
 
 
 def cmd_check(
@@ -272,7 +278,7 @@ def cmd_check(
     no_api: bool = False,
     no_cli: bool = False,
 ) -> int:
-    api, _bins = detect_pipelines(
+    api, bins = detect_pipelines(
         root, spec_name, spec_explicit, extra_bins or [], no_api=no_api, no_cli=no_cli
     )
     stale: list[str] = []
@@ -284,13 +290,162 @@ def cmd_check(
             stale.append(f"missing: {rel}")
         elif path.read_text(encoding="utf-8") != content:
             stale.append(f"stale:   {rel}")
+    if bins:
+        stale += _respec_committed(root, bins, write=False)
+    if not no_cli:
+        stale += render_cli.check_rendered(root)
+    glue_stale, glue_hint = _check_glue(root)
+    stale += glue_stale
     if stale:
         print("docs are NOT up to date:", file=sys.stderr)
         for line in stale:
             print(f"  {line}", file=sys.stderr)
+        if glue_hint:
+            print(glue_hint, file=sys.stderr)
         print(f"run `{REGEN_CMD}` and commit the result.", file=sys.stderr)
         return 1
     print("docs are up to date")
+    return 0
+
+
+def _respec_committed(root: Path, bins: dict, *, write: bool = True) -> list[str]:
+    """Regenerate (or, on check, diff-check) the committed contract of every
+    python-recipe bin, through usage_spec's merge - the no-task half of the
+    `cli:spec` contract (the glue's own `docs-kit spec` writes the same
+    bytes; refresh/check must not hand-edit what a task could keep honest).
+
+    - go bins: their core is cobra's (--usage-spec) - this CLI never sips
+      the caller's stdin unasked; the glue's `mise run cli:spec` owns them.
+    - kdl/unknown bins: the committed contract IS the source, nothing to regen.
+    - an app that cannot be imported in THIS venv (shim/tool installs - the
+      consumer app lives in ITS venv): skip with a note, same bytes will come
+      from the consumer's own task run.
+    """
+    stale: list[str] = []
+    for name, info in sorted(bins.items()):
+        if info.get("recipe") != "python" or not info.get("app"):
+            continue
+        out = root / CLI_DIR / f"{name}{KDL_SUFFIX}"
+        extra_path = root / CLI_DIR / f"{name}{KDL_EXTRA_SUFFIX}"
+        try:
+            app = usage_spec.load_app(info["app"])
+        except (ImportError, ModuleNotFoundError):
+            print(
+                _c(
+                    f"  note: {name}: cannot import {info['app']} here - the"
+                    " contract is regenerated by `uv run docs-kit spec` (its own venv)",
+                    DIM,
+                )
+            )
+            continue
+        text = usage_spec.render_text(
+            usage_spec.typer_export(app, name),
+            extra_path.read_text(encoding="utf-8") if extra_path.is_file() else None,
+        )
+        if write:
+            _emit_contract(out, text, root)
+        else:
+            rel = (
+                out.relative_to(root).as_posix()
+                if out.is_relative_to(root)
+                else str(out)
+            )
+            if not out.is_file():
+                stale.append(f"missing: {rel}")
+            elif out.read_text(encoding="utf-8") != text:
+                stale.append(f"stale:   {rel}")
+    return stale
+
+
+def _emit_contract(out: Path, text: str, root: Path) -> None:
+    """Byte-stable contract write with refresh-style reporting."""
+    rel = out.relative_to(root).as_posix() if out.is_relative_to(root) else str(out)
+    current = out.read_text(encoding="utf-8") if out.is_file() else None
+    if current == text:
+        print(_c(f"  contract current: {rel}", DIM))
+        return
+    _write(out, text)
+    print(f"  {_c('+', CYAN)} {rel}")
+
+
+def cmd_spec(
+    root: Path,
+    *,
+    bins: list[str] | None = None,
+    extra: str | None = None,
+    out: str | None = None,
+    no_cli: bool = False,
+) -> int:
+    """docs-kit spec - regenerate cli/<bin>.usage.kdl from the code behind.
+
+    python recipe: introspects the console script's Typer app in THIS venv
+    (dependency mode: docs-kit - with usage-spec-typer - lives in the
+    consumer's venv, so `uv run docs-kit spec` sees the repo's own app).
+    go recipe: the core is cobra's - pipe it (`go run . --usage-spec |
+    docs-kit spec --bin mycli`), the same --kdl-stdin contract the payload
+    script has always had. kdl/unknown recipes have no code to regen from.
+    The curated extra defaults to cli/<bin>.usage.extra.kdl, the write to
+    cli/<bin>.usage.kdl (the --extra/--out overrides serve single-contract
+    runs and mirror usage-spec.py's flags).
+    """
+    explicit = list(bins or [])
+    _, detected = detect_pipelines(
+        root, API_SPEC_DEFAULT, False, explicit, no_api=True, no_cli=no_cli
+    )
+    targets = {n: detected[n] for n in (explicit or sorted(detected))}
+    if not targets:
+        print(_c("no CLI evidence (cli/, typer console script, go.mod+cobra)", DIM))
+        return 0
+    if (extra or out) and len(targets) != 1:
+        sys.exit("ERROR: --extra/--out address one contract - name it with --bin NAME")
+    for name, info in sorted(targets.items()):
+        recipe = info.get("recipe")
+        if extra:
+            extra_path = Path(extra)
+            if not extra_path.is_absolute():
+                extra_path = root / extra
+            if not extra_path.is_file():
+                sys.exit(
+                    f"ERROR: extra spec {extra} not found; create it or drop --extra"
+                )
+            extra_text = extra_path.read_text(encoding="utf-8")
+        else:
+            extra_path = root / CLI_DIR / f"{name}{KDL_EXTRA_SUFFIX}"
+            extra_text = (
+                extra_path.read_text(encoding="utf-8") if extra_path.is_file() else None
+            )
+        target = (root / out) if out else root / CLI_DIR / f"{name}{KDL_SUFFIX}"
+        if recipe == "python":
+            app = usage_spec.load_app(info["app"])
+            _emit_contract(
+                target,
+                usage_spec.render_text(usage_spec.typer_export(app, name), extra_text),
+                root,
+            )
+        elif recipe == "go" or (
+            explicit and recipe == "unknown" and not sys.stdin.isatty()
+        ):
+            if sys.stdin.isatty():
+                sys.exit(
+                    f"ERROR: {name}'s core is cobra's - pipe it: "
+                    f"`go run . --usage-spec | docs-kit spec --bin {name}`"
+                )
+            _emit_contract(
+                target, usage_spec.render_text(sys.stdin.read(), extra_text), root
+            )
+        else:
+            rel = (
+                target.relative_to(root).as_posix()
+                if target.is_relative_to(root)
+                else str(target)
+            )
+            print(
+                _c(
+                    f"  {name}: hand-written contract (no code to regen)"
+                    f" - leave {rel} authored",
+                    DIM,
+                )
+            )
     return 0
 
 
@@ -644,11 +799,215 @@ def _mise_step(root: Path, kit_home: str, cli: bool = False) -> None:
     _print_mise_next_steps(root, block)
 
 
-def _integrate_gitignore(root: Path, use_mise: bool) -> None:
+# ---------------------------------------------------------------------------
+# committed mise glue (init --with-mise --committed): dependency mode's task
+# set. Unlike the gitignored opt-in block above, THIS block is committed in
+# the repo's mise.toml: it is byte-canonical output of _glue_block() below,
+# delimited by marker comments, idempotently replaced, and drift-gated by
+# every `docs-kit check` (consumers with no block - shim/Go users - are simply
+# "not in glue mode": nothing is demanded, nothing is compared).
+
+
+MISE_COMMITTED_FILES = ("mise.toml", ".mise.toml")
+GLUE_BLOCK_END = "# --- end docs-kit tasks ---"
+GLUE_MARK = re.compile(
+    r"^# --- docs-kit tasks v\S+ ---\n.*?^# --- end docs-kit tasks ---$",
+    re.MULTILINE | re.DOTALL,
+)
+GLUE_VERSION = re.compile(r"^# --- docs-kit tasks v(\S+) ---")
+TOOLS_TABLE = re.compile(r"^\[tools\]\s*$", re.MULTILINE)
+TOOLS_USAGE_KEY = re.compile(r"^\s*usage\s*=")
+
+_GLUE_TASKS_CLI = (
+    (
+        '[tasks."cli:spec"]',
+        'description = "Regenerate cli/*.usage.kdl contracts from the code (docs-kit spec)"',
+        'run = "uv run docs-kit spec"',
+    ),
+)
+_GLUE_TASKS_REST = (
+    (
+        '[tasks."docs:refresh"]',
+        'description = "Regenerate everything detected: contracts, reference pages, API pages when an openapi.json is here"',
+        'run = "uv run docs-kit refresh"',
+    ),
+    (
+        '[tasks."docs:build"]',
+        'description = "Refresh, then build the static site into site/"',
+        f"run = 'mise run docs:refresh && if command -v zensical >/dev/null 2>&1; then zensical build --clean; else uvx --from \"zensical=={ZENSICAL_VERSION}\" zensical build --clean; fi'",
+    ),
+    (
+        '[tasks."docs:serve"]',
+        'description = "Serve the docs with live reload on http://127.0.0.1:$PORT (prefers 8010, falls back to the first free port in 8000-8999; pin exactly via DOCS_PORT)"',
+        'run = "uv run docs-kit serve"',
+    ),
+    (
+        '[tasks."docs:check"]',
+        'description = "Fail when generated docs are stale (CI and git hooks): docs-kit check, then the docs diff must be empty"',
+        'run = "uv run docs-kit check && git diff --exit-code -- docs openapi.json cli"',
+    ),
+)
+
+
+def _glue_block(cli: bool, has_tools: bool) -> str:
+    """The whole marker-delimited block, byte-canonical. [tools] joins the
+    block only when the rest of the file has no [tools] table (a duplicate
+    table header would be invalid TOML and make mise skip the WHOLE file);
+    with one, `usage = "latest"` upserts into the existing table instead.
+    cli=False (API-only glue) additionally skips [tools] and cli:spec."""
+    lines = [f"# --- docs-kit tasks v{__version__} ---"]
+    if cli and not has_tools:
+        lines += ["[tools]", 'usage = "latest"', ""]
+    for task in (_GLUE_TASKS_CLI if cli else ()) + _GLUE_TASKS_REST:
+        lines += [*task, ""]
+    lines.append(GLUE_BLOCK_END)
+    return "\n".join(lines)
+
+
+def _glue_task_file(root: Path) -> Path | None:
+    """The file holding (or destined to hold) the block: existing marker
+    first, else the repo's existing mise config, else mise.toml."""
+    marked = next(
+        (
+            root / name
+            for name in MISE_COMMITTED_FILES
+            if (root / name).is_file() and GLUE_MARK.search(_read(root / name) or "")
+        ),
+        None,
+    )
+    if marked:
+        return marked
+    return next(
+        ((root / name) for name in MISE_COMMITTED_FILES if (root / name).is_file()),
+        root / MISE_COMMITTED_FILES[0],
+    )
+
+
+def _read(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _glue_split(text: str) -> tuple[str, str | None]:
+    """(file text minus the glue block, block or None)."""
+    m = GLUE_MARK.search(text)
+    if not m:
+        return text, None
+    return text[: m.start()] + text[m.end() :], m.group(0)
+
+
+def _tools_usage_missing(stripped: str) -> bool:
+    """True when the config has a [tools] table (outside any block, which the
+    caller already removed) that lacks a usage key."""
+    m = TOOLS_TABLE.search(stripped)
+    if m is None:
+        return False
+    for line in stripped[m.end() :].split("\n"):
+        if line.startswith("["):
+            return True  # the table ended without ever seeing usage
+        if TOOLS_USAGE_KEY.match(line):
+            return False
+    return True
+
+
+def _insert_tools_usage(stripped: str) -> str:
+    """Right after the [tools] header line (canonical placement; the file is
+    re-parse-checked before the merged result is ever written)."""
+    m = TOOLS_TABLE.search(stripped)
+    if m is None:
+        return stripped
+    idx = stripped.index("\n", m.start()) + 1
+    return stripped[:idx] + 'usage = "latest"\n' + stripped[idx:]
+
+
+def _write_committed_glue(root: Path, cli: bool) -> int:
+    """Write/replace the canonical block in the repo's mise.toml (idempotent:
+    re-running with the same kit version is a no-op; the block moves to EOF).
+    The whole file must re-parse as TOML before anything is written - this is
+    a COMMITTED file; the same _ensure_mise_local caution applies, only
+    harsher: a risky merge never lands."""
+    path = _glue_task_file(root)
+    assert path is not None
+    text = _read(path) or ""
+    stripped, current = _glue_split(text)
+    has_tools = bool(TOOLS_TABLE.search(stripped))
+    if has_tools:
+        stripped = (
+            _insert_tools_usage(stripped)
+            if _tools_usage_missing(stripped)
+            else stripped
+        )
+    block = _glue_block(cli, has_tools=has_tools)
+    body = stripped.rstrip("\n")
+    merged = (body + "\n\n" if body else "") + block + "\n"
+    if not _valid_toml(merged):
+        print(
+            _c(
+                f"ERROR: {path.name} + the docs-kit block would not re-parse as "
+                "valid TOML - nothing written. Paste this block instead and "
+                "check the tables by hand:",
+                RED,
+            ),
+            file=sys.stderr,
+        )
+        print(block, file=sys.stderr)
+        return 1
+    if merged == text:
+        rel = path.relative_to(root) if path.is_relative_to(root) else path
+        print(_c(f"  {rel}: docs-kit task block current (v{__version__})", DIM))
+        return 0
+    _write(path, merged)
+    rel = path.relative_to(root) if path.is_relative_to(root) else path
+    verb = "replaced" if current else "written"
+    print(f"  {_c('+', CYAN)} {rel}: docs-kit task block {verb} (v{__version__})")
+    return 0
+
+
+def _check_glue(root: Path) -> tuple[list[str], str]:
+    """(stale lines, remediation hint) for the committed block. Absent block
+    = glue mode not in use (shim / Go / API-shim consumers) -> not stale."""
+    stale: list[str] = []
+    hint = ""
+    for name in MISE_COMMITTED_FILES:
+        path = root / name
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        _stripped, block = _glue_split(text)
+        if block is None:
+            continue
+        cli = '[tasks."cli:spec"]' in block
+        expected = _glue_block(cli, has_tools=bool(TOOLS_TABLE.search(_stripped)))
+        current_version = (GLUE_VERSION.match(block.split("\n", 1)[0]) or ["", "?"])[1]
+        if block != expected:
+            stale.append(
+                f"stale:   {name} docs-kit task block (v{current_version} vs"
+                f" expected v{__version__} + canonical body)"
+            )
+            hint = (
+                "  the docs-kit task block in "
+                f"{name}: run `docs-kit init --with-mise --committed`"
+                " (idempotent) or paste the block it prints"
+            )
+        if _tools_usage_missing(_stripped):
+            stale.append(f"stale:   {name} [tools] has no usage key")
+            hint = hint or f'  add usage = "latest" under the [tools] table in {name}'
+    return stale, hint
+
+
+def _integrate_gitignore(
+    root: Path, use_mise: bool, committed_mise: bool = False
+) -> None:
     path = root / ".gitignore"
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     lines = text.splitlines()
-    entries = GITIGNORE_ENTRIES + (MISE_GITIGNORE_ENTRIES if use_mise else ())
+    if committed_mise:
+        # dependency mode owns no shim layer; only personal overrides stay out
+        entries: tuple[str, ...] = GITIGNORE_ENTRIES + ("mise.local.toml",)
+    else:
+        entries = GITIGNORE_ENTRIES + (MISE_GITIGNORE_ENTRIES if use_mise else ())
     added = [e for e in entries if e not in lines]
     if not added:
         print(_c(f"  .gitignore already covers {', '.join(entries)}", DIM))
@@ -678,6 +1037,7 @@ def cmd_init(
     kit_home: str = DEFAULT_SHIM,
     use_mise: bool = False,
     *,
+    committed_mise: bool = False,
     spec_explicit: bool = False,
     extra_bins: list[str] | None = None,
     no_api: bool = False,
@@ -693,6 +1053,11 @@ def cmd_init(
     - missing files                             -> written
     - byte-identical files                      -> skipped
     - existing files that differ (hand edits)   -> only overwritten with --force
+    - committed glue (--with-mise --committed, dependency mode: docs-kit is
+      a dev dep of this repo): write/replace the marker-delimited canonical
+      task block in mise.toml (idempotent, TOML-validity-checked; [tools]
+      usage joins the block or upserts into an existing table) - no shim, no
+      .docs-kit/, no gitignored docs wiring
     - mise.local.toml absent (and no opt-in in other mise configs, and the
       task layer ready)   -> created with the opt-in keys (git-ignored)
     - mise.local.toml / .mise.toml present      -> NEVER written or modified;
@@ -763,22 +1128,33 @@ def cmd_init(
         _report_group(title, written[title], unchanged[title])
 
     _section("mise")
-    if use_mise:
+    if committed_mise:
+        # dependency mode: the task block is COMMITTED in mise.toml - no shim,
+        # no include, no gitignored docs wiring. rc!=0 only when the merged
+        # file would not re-parse as TOML (then the plan is printed instead).
+        _report_legacy_mise_lines(root)
+        rc = _write_committed_glue(root, cli=bool(bins))
+        if rc:
+            return rc
+    elif use_mise:
         _mise_step(root, kit_home, cli=bool(bins))
     else:
         print(_c("  skipped - pass --with-mise to wire the docs:* tasks", DIM))
 
     _section("Git")
-    _integrate_gitignore(root, use_mise)
+    _integrate_gitignore(root, use_mise, committed_mise)
 
     _section("Next steps")
-    for line in _next_steps(root, bins, use_mise):
+    for line in _next_steps(root, bins, use_mise or committed_mise, committed_mise):
         print(line)
     return 0
 
 
 def _next_steps(
-    root: Path, bins: dict[str, dict[str, str]], use_mise: bool
+    root: Path,
+    bins: dict[str, dict[str, str]],
+    use_mise: bool,
+    committed: bool = False,
 ) -> list[str]:
     steps = []
     if use_mise:
@@ -790,6 +1166,14 @@ def _next_steps(
         steps += [
             f"  {REGEN_CMD}    regenerate the reference pages",
             "  docs-kit serve      preview with live reload",
+        ]
+    if committed:
+        steps += [
+            _c(
+                "  committed glue: the docs:* + cli:spec tasks live in mise.toml",
+                DIM,
+            ),
+            _c("  (edit nothing there by hand: `docs-kit check` gates its drift)", DIM),
         ]
     if bins:
         steps += [
@@ -806,13 +1190,24 @@ def _next_steps(
                     _c(f"    {name}: contract ready -> mise run docs:refresh", DIM)
                 )
             elif info["recipe"] == "python":
-                steps.append(
-                    _c(
-                        f"    {name}: add usage-spec-typer to [dependency-groups] dev "
-                        'and a "cli:spec" task (recipe in cli-standard.md)',
-                        DIM,
+                if committed:
+                    steps.append(
+                        _c(
+                            f"    {name}: `mise run cli:spec` regenerates"
+                            f" cli/{name}.usage.kdl from {info['app']}",
+                            DIM,
+                        )
                     )
-                )
+                else:
+                    steps.append(
+                        _c(
+                            f'    {name}: uv add --dev "docs-kit @'
+                            f' git+https://github.com/ldelarue/docs-kit.git@v{__version__}"'
+                            " then `docs-kit init --with-mise --committed`"
+                            " (or a cli:spec task running `uv run docs-kit spec`)",
+                            DIM,
+                        )
+                    )
             elif info["recipe"] == "go":
                 steps.append(
                     _c(
@@ -834,8 +1229,9 @@ def _next_steps(
 
 # ---------------------------------------------------------------------------
 # The interface contract. cli/docs-kit.usage.kdl is GENERATED from this
-# metadata by `mise run cli:spec` (shared/mise/usage-spec.py plus the
-# usage-spec-typer package) - help strings here ARE the docs, edit the code,
+# metadata by `mise run cli:spec` (`docs-kit spec`, whose Typer export the
+# same package provides, merged with usage_spec's extra-file rules)
+# - help strings here ARE the docs, edit the code,
 # never the committed KDL (docs/references/cli-standard.md).
 
 ROOT_HELP = "target repo (default: cwd)"
@@ -891,8 +1287,17 @@ def init(
         bool,
         typer.Option(
             "--with-mise/--no-with-mise",
-            help="add mise integration (pulls the .docs-kit task layer, "
-            "wires the docs:* tasks)",
+            help="add mise integration (shim mode: pulls the .docs-kit task "
+            "layer and wires the docs:* tasks through mise.local.toml)",
+        ),
+    ] = False,
+    committed: Annotated[
+        bool,
+        typer.Option(
+            "--committed/--no-committed",
+            help="with --with-mise: dependency mode - write the canonical "
+            "[tools] usage + docs task block into the repo's mise.toml "
+            "(committed; requires docs-kit to be a dev dependency here)",
         ),
     ] = False,
     docs_kit: Annotated[
@@ -904,6 +1309,8 @@ def init(
     ] = None,
 ) -> NoReturn:
     """scaffold a Zensical docs site in a repo"""
+    if committed and not with_mise:
+        raise typer.BadParameter("--committed needs --with-mise")
     raise typer.Exit(
         cmd_init(
             Path(root).resolve(),
@@ -911,12 +1318,53 @@ def init(
             force,
             docs_kit or _default_kit_home(),
             use_mise=with_mise,
+            committed_mise=committed,
             spec_explicit=spec is not None,
             extra_bins=list(bin or []),
             no_api=no_api,
             no_cli=no_cli,
         )
     )
+
+
+@app.command()
+def spec(
+    root: Annotated[str, typer.Argument(help=ROOT_HELP)] = ".",
+    bin: Annotated[list[str] | None, typer.Option(help=BIN_HELP)] = None,
+    extra: Annotated[
+        str | None,
+        typer.Option(
+            help="curated extra .kdl file (default: cli/<bin>.usage.extra.kdl "
+            "when present; single-contract runs only)"
+        ),
+    ] = None,
+    out: Annotated[
+        str | None,
+        typer.Option(
+            help="write the contract here instead of cli/<bin>.usage.kdl "
+            "(single-contract runs only)"
+        ),
+    ] = None,
+    no_cli: Annotated[bool, typer.Option("--no-cli/--cli", help=NO_CLI_HELP)] = False,
+) -> NoReturn:
+    """regenerate cli/<bin>.usage.kdl contracts from the code behind them"""
+    raise typer.Exit(
+        cmd_spec(
+            Path(root).resolve(),
+            bins=list(bin or []),
+            extra=extra,
+            out=out,
+            no_cli=no_cli,
+        )
+    )
+
+
+@app.command("render")
+def render_cmd(
+    root: Annotated[str, typer.Argument(help=ROOT_HELP)] = ".",
+) -> NoReturn:
+    """render docs/references/cli/<bin>.md from the committed usage contracts"""
+    raise typer.Exit(render_cli.cmd_render(Path(root).resolve()))
 
 
 @app.command()

@@ -6,7 +6,10 @@ readme = "README.md"
 license = "CC-BY-4.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-dependencies = ["typer>=0.27.2"]
+# usage-spec-typer is RUNTIME: `docs-kit spec` imports the consumer's Typer
+# app inside the consumer's venv (dependency mode installs docs-kit there),
+# so the exporter must be importable wherever the docs-kit console script is.
+dependencies = ["typer>=0.27.2", "usage-spec-typer>=1.2.1"]
 
 [project.scripts]
 docs-kit = "docs_kit.cli:main"
@@ -14,10 +17,6 @@ docs-kit = "docs_kit.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
-    # for tests/test_usage_spec.py and the cli:spec task: the helper imports
-    # the Typer app through the consumer's venv; docs-kit's own typer app is
-    # introspected by the same package that consumers use (cli-standard recipe 1)
-    "usage-spec-typer>=1.2.1",
 ]
 
 [build-system]

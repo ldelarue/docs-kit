@@ -117,17 +117,22 @@ def render_cli_standard_page(
 def _bin_recipe(name: str, info: dict[str, str]) -> str:
     recipe = info.get("recipe", "unknown")
     if recipe == "python":
-        app = info.get("app", "<pkg>.cli:app")
         return (
-            f"### `{name}` — Python / Typer\n\n"
+            f"### `{name}` — Python / Typer (dependency mode)\n\n"
+            "docs-kit (which carries the Typer→usage exporter) is a dev\n"
+            "dependency of this repo - `docs-kit init --with-mise --committed` turns\n"
+            "it into a mise task. The exporter imports the Typer app and merges the\n"
+            "curated extra through the venv the CLI is declared in.\n\n"
             "```toml\n"
             "# mise.toml — regenerate the committed contract\n"
             '[tasks."cli:spec"]\n'
             'description = "Regenerate cli/{name}.usage.kdl from the Typer app"\n'
-            'run = \'uv run python "$DOCS_KIT/shared/mise/usage-spec.py" '
-            "--typer {app} --bin {name} "
-            "--extra cli/{name}.usage.extra.kdl --out cli/{name}.usage.kdl'\n"
-            "```\n".format(name=name, app=app)
+            "run = 'uv run docs-kit spec --bin {name}'\n"
+            "```\n"
+            "`--extra`/`--out` default to the cli/{name}.usage.extra.kdl /\n"
+            "cli/{name}.usage.kdl conventions shown above - pass them only to\n"
+            "deviate. `docs-kit init --with-mise --committed` writes the canonical\n"
+            "task block for you.\n".format(name=name)
         )
     if recipe == "go":
         return (
@@ -136,9 +141,7 @@ def _bin_recipe(name: str, info: dict[str, str]) -> str:
             "```toml\n"
             '[tasks."cli:spec"]\n'
             'description = "Regenerate cli/{name}.usage.kdl from cobra"\n'
-            'run = \'go run . --usage-spec | python "$DOCS_KIT/shared/mise/usage-spec.py" '
-            "--kdl-stdin --bin {name} --extra cli/{name}.usage.extra.kdl "
-            "--out cli/{name}.usage.kdl'\n"
+            "run = 'go run . --usage-spec | docs-kit spec --bin {name}'\n"
             "```\n".format(name=name)
         )
     hand = (

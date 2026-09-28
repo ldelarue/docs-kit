@@ -1,8 +1,14 @@
-"""Tests for shared/mise/usage-spec.py (the committed-KDL merge helper)."""
+"""Tests for docs_kit.usage_spec - the committed-KDL merge helper.
+
+The module is also the byte-source of shared/mise/usage-spec.py, the pulled
+payload that keeps the old `python $DOCS_KIT/shared/mise/usage-spec.py` task
+shape working for shim consumers - both shapes are gated here.
+"""
 
 from __future__ import annotations
 
-import importlib.util
+import subprocess
+import sys
 import textwrap
 from enum import Enum
 from pathlib import Path
@@ -11,13 +17,55 @@ from typing import Annotated
 import pytest
 import typer
 
+from docs_kit import usage_spec
+
 KIT = Path(__file__).resolve().parents[1]
 HELPER = KIT / "shared/mise/usage-spec.py"
+MODULE = KIT / "src/docs_kit/usage_spec.py"
 
-_spec = importlib.util.spec_from_file_location("usage_spec", HELPER)
-usage_spec = importlib.util.module_from_spec(_spec)
-assert _spec.loader is not None
-_spec.loader.exec_module(usage_spec)
+
+# --- the payload copy stays byte-identical to the module ---------------------
+
+
+def test_payload_is_byte_copy_of_module():
+    payload = HELPER.read_text(encoding="utf-8")
+    module_src = MODULE.read_text(encoding="utf-8")
+    head, _, tail = payload.partition(usage_spec.PAYLOAD_SENTINEL + "\n")
+    assert head.startswith("#!/usr/bin/env python3")
+    assert "GENERATED" in head
+    assert tail == module_src, (
+        "shared/mise/usage-spec.py drifted from the module - run "
+        "`python tools/sync-usage-spec-payload.py`"
+    )
+
+
+def test_payload_wrapper_runs_stand_alone(tmp_path):
+    """The old task shape (go path): plain python, stdlib only, no package."""
+    extra = tmp_path / "toy.usage.extra.kdl"
+    extra.write_text('exit_code 9 "nine"\n')
+    out = tmp_path / "cli/toy.usage.kdl"
+    core = 'name toy\nbin toy\nabout "t."\n'
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(HELPER),
+            "--kdl-stdin",
+            "--bin",
+            "toy",
+            "--extra",
+            str(extra),
+            "--out",
+            str(out),
+        ],
+        input=core,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    text = out.read_text(encoding="utf-8")
+    assert text.startswith(usage_spec.BANNER)
+    assert 'exit_code 9 "nine"' in text
 
 
 # --- generated-core shapes (byte-exact fixtures from real typer_usage runs) ---

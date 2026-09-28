@@ -71,14 +71,23 @@ Judgement calls — clig.dev owns these; the generator cannot see them
 
 ## Per-language recipes (regeneration wiring)
 
-### `docs-kit` — Python / Typer
+### `docs-kit` — Python / Typer (dependency mode)
+
+docs-kit (which carries the Typer→usage exporter) is a dev
+dependency of this repo - `docs-kit init --with-mise --committed` turns
+it into a mise task. The exporter imports the Typer app and merges the
+curated extra through the venv the CLI is declared in.
 
 ```toml
 # mise.toml — regenerate the committed contract
 [tasks."cli:spec"]
 description = "Regenerate cli/docs-kit.usage.kdl from the Typer app"
-run = 'uv run python "$DOCS_KIT/shared/mise/usage-spec.py" --typer docs_kit.cli:app --bin docs-kit --extra cli/docs-kit.usage.extra.kdl --out cli/docs-kit.usage.kdl'
+run = 'uv run docs-kit spec --bin docs-kit'
 ```
+`--extra`/`--out` default to the cli/docs-kit.usage.extra.kdl /
+cli/docs-kit.usage.kdl conventions shown above - pass them only to
+deviate. `docs-kit init --with-mise --committed` writes the canonical
+task block for you.
 
 
 ## What the page in `docs/references/cli/` gives your users

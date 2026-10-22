@@ -13,7 +13,7 @@ jobs:
 
       # mise reads .mise.toml, so the runner gets the exact tools the pre-commit
       # hook uses (hk, ruff, shellcheck) instead of a hand-maintained step list.
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
 
       - name: hk validate
         run: hk validate

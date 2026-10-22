@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/ldelarue/docs-kit/compare/v0.5.1...v0.5.2) (2026-10-22)
+
+
+### Bug Fixes
+
+* release dependency updates ([5d9e010](https://github.com/ldelarue/docs-kit/commit/5d9e010bdbbffc255207253d907385526b69a4d5))
+
 ## [0.5.1](https://github.com/ldelarue/docs-kit/compare/v0.5.0...v0.5.1) (2026-09-28)
 
 
